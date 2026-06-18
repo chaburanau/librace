@@ -8,7 +8,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 
 | Simulator | Module | Transport | Status |
 |-----------|--------|-----------|--------|
-| iRacing | `librace.simulators.iracing` | Shared memory | Planned |
+| iRacing | `librace.simulators.iracing` | Shared memory | **Implemented** |
 | Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | Planned |
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory + UDP | Planned |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | Planned |
@@ -20,6 +20,7 @@ More titles will be added over time.
 ## Requirements
 
 - Zig 0.16.0 or newer
+- Windows (for iRacing shared-memory telemetry today)
 
 ## Project layout
 
@@ -27,17 +28,14 @@ More titles will be added over time.
 librace/
 ├── src/
 │   ├── root.zig              # Library entry point
-│   ├── core/                   # Shared types and transport helpers
-│   │   ├── types.zig
-│   │   └── transport/        # mmap, UDP, and future transports
-│   └── simulators/             # One folder per simulator
-│       ├── iracing/
-│       ├── ac/
-│       ├── acc/
-│       └── ...
-├── examples/                   # Runnable programs (dev smoke tests)
-│   ├── iracing/main.zig
-│   └── ...
+│   ├── core/                 # Shared types and transport helpers
+│   └── simulators/           # One folder per simulator
+├── examples/
+│   ├── common/               # Shared simple + dashboard runners
+│   ├── dashboard/            # Single dashboard binary + per-sim providers
+│   ├── iracing/
+│   │   └── simple.zig        # Smoke test (machine-readable output)
+│   └── <name>/               # simple.zig for each simulator
 ├── build.zig
 └── build.zig.zon
 ```
@@ -45,20 +43,49 @@ librace/
 ## Quick start
 
 ```bash
-# Run tests
+# Run library unit tests
 zig build test
 
 # Build all example binaries (installed to zig-out/bin/)
 zig build
 
-# Run an example while a simulator is running (once implemented)
+# Simple smoke test (manual check while in a live session)
 zig build run-iracing
-zig build run-ac
-zig build run-acc
-zig build run-ace
-zig build run-acr
-zig build run-lmu
+
+# Shared terminal dashboard — pick simulator at build time
+zig build dashboard -Dsim=iracing
+zig build dashboard -Dsim=ace
 ```
+
+### Example types
+
+Each simulator has a **simple** example; the **dashboard** is one shared program with per-sim **providers** under `examples/dashboard/providers/`.
+
+| Type | Binary | Build step | Purpose |
+|------|--------|------------|---------|
+| **Simple** | `zig-out/bin/<name>` | `zig build run-<name>` | Connect, poll a few samples, print one machine-readable line (`OK …` / `FAIL …`); exits 0 on success, 1 on failure |
+| **Dashboard** | `zig-out/bin/dashboard` | `zig build dashboard -Dsim=<name>` | Full-screen terminal UI driven by a common `Data` snapshot filled by the selected provider |
+
+Simple example output (iRacing, when connected):
+
+```
+OK track=Circuit des 24 Heures du Mans car=Ferrari 499P gear=3 speed_kmh=142.3 rpm=6500 vars=354
+```
+
+Stub simulators print `FAIL not_implemented short_name=ac` and exit with code 1. The dashboard shows a placeholder when the selected provider is not implemented yet.
+
+### Simple build steps
+
+| Simulator | Build step |
+|-----------|------------|
+| iRacing | `run-iracing` |
+| AC | `run-ac` |
+| ACC | `run-acc` |
+| ACE | `run-ace` |
+| ACR | `run-acr` |
+| LMU | `run-lmu` |
+
+Dashboard: `zig build dashboard -Dsim=<name>` for any short name above.
 
 ## Using the library
 
@@ -66,17 +93,38 @@ Add librace as a dependency in your `build.zig.zon`, then import the module in y
 
 ```zig
 const librace = @import("librace");
+const ir = librace.simulators.iracing;
 
-// Shared types and transport helpers
-const core = librace.core;
+var client = try ir.connect(allocator);
+defer client.deinit();
 
-// Per-simulator APIs (stubs today; full APIs as each title is implemented)
-const iracing = librace.simulators.iracing;
+while (client.poll() == .ok) {
+    // Strict typed read, or lenient numeric read.
+    const gear = try client.getAs(i32, ir.keys.var_name.gear);
+    const speed = client.getNumber(ir.keys.var_name.speed) orelse 0;
+
+    // Session metadata. Use playerDriverGet for the player's car in multi-car sessions.
+    const track = client.sessionGet(ir.keys.session.track_display_name);
+    const car = client.playerDriverGet(ir.keys.driver.car_screen_name);
+    _ = .{ gear, speed, track, car };
+}
 ```
 
-## Examples
+For hot loops, resolve a [`VarHandle`] once and read many times, or bind a typed struct whose
+field names match IRSDK variable names:
 
-Each simulator has a matching example under `examples/<name>/`. These programs connect to the running game and print live telemetry. They are the primary manual test during development — run the matching example with the simulator on track to verify parsing and timing.
+```zig
+const Telemetry = struct { Speed: f32 = 0, Gear: i32 = 0, RPM: f32 = 0 };
+
+var telemetry = client.bind(Telemetry);
+while (client.poll() == .ok) {
+    telemetry.update();
+    const v = telemetry.values; // v.Speed, v.Gear, v.RPM
+    _ = v;
+}
+```
+
+See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 
 ## License
 
