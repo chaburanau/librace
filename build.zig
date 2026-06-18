@@ -96,7 +96,9 @@ fn addDashboardExample(
         std.debug.panic("unknown simulator '{s}' — expected one of: iracing, ac, acc, ace, acr, lmu", .{sim});
     }
 
-    const implemented = std.mem.eql(u8, sim, "iracing");
+    const is_iracing = std.mem.eql(u8, sim, "iracing");
+    const is_ace = std.mem.eql(u8, sim, "ace");
+    const implemented = is_iracing or is_ace;
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "short_name", sim);
@@ -113,11 +115,13 @@ fn addDashboardExample(
             },
         });
 
-        const iracing_connect = b.addModule("iracing_connect", .{
-            .root_source_file = b.path("examples/iracing/connect_error.zig"),
-            .target = target,
-        });
-        sim_module.addImport("iracing_connect", iracing_connect);
+        if (is_iracing) {
+            const iracing_connect = b.addModule("iracing_connect", .{
+                .root_source_file = b.path("examples/iracing/connect_error.zig"),
+                .target = target,
+            });
+            sim_module.addImport("iracing_connect", iracing_connect);
+        }
 
         break :blk b.addExecutable(.{
             .name = "dashboard",
