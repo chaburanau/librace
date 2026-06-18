@@ -11,7 +11,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | iRacing | `librace.simulators.iracing` | Shared memory | **Implemented** |
 | Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | Planned |
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory + UDP | Planned |
-| Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | Planned |
+| Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | Planned |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | Planned |
 
@@ -121,6 +121,33 @@ while (client.poll() == .ok) {
     telemetry.update();
     const v = telemetry.values; // v.Speed, v.Gear, v.RPM
     _ = v;
+}
+```
+
+### Assetto Corsa Evo
+
+AC Evo exposes three fixed shared-memory pages (`physics`, `graphics`, `static`). The client
+gives typed struct access alongside generic name-based lookup and discovery:
+
+```zig
+const ace = librace.simulators.ace;
+
+var client = try ace.connect(allocator);
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    // Typed struct access — the most direct route for AC Evo's fixed layout.
+    const p = client.physics();
+    const speed_kmh = p.speed_kmh;
+    const rpm = p.rpms;
+
+    // Generic name-based access over the comptime field catalog.
+    const fuel = client.getNumber(ace.keys.physics.fuel) orelse 0;
+
+    // Session metadata (static + graphics pages).
+    const track = client.trackName();
+    const car = client.carModel();
+    _ = .{ speed_kmh, rpm, fuel, track, car };
 }
 ```
 

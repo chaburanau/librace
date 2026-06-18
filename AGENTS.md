@@ -243,6 +243,7 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | Simulator | Status |
 |-----------|--------|
 | `iracing` | **Implemented** — IRSDK shared memory, variable catalog, session YAML scan, live poll |
-| `ac`, `acc`, `ace`, `acr`, `lmu` | Stubs (`name` + `transport` constants) |
+| `ace` | **Implemented** — AC Evo three-page shared memory (physics/graphics/static), comptime field catalog, typed + generic access, live poll |
+| `ac`, `acc`, `acr`, `lmu` | Stubs (`name` + `transport` constants) |
 
 Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles (LMU, etc.) will likely reuse patterns from the iRacing IRSDK section.
