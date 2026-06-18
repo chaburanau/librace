@@ -10,4 +10,6 @@ pub const simulators = @import("simulators/root.zig");
 
 test {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(simulators.iracing);
+    _ = @import("core/transport/mmap.zig");
 }

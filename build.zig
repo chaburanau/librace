@@ -12,40 +12,25 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    const examples = [_]struct { name: []const u8, root: []const u8 }{
-        .{ .name = "iracing", .root = "examples/iracing/main.zig" },
-        .{ .name = "ac", .root = "examples/ac/main.zig" },
-        .{ .name = "acc", .root = "examples/acc/main.zig" },
-        .{ .name = "ace", .root = "examples/ace/main.zig" },
-        .{ .name = "acr", .root = "examples/acr/main.zig" },
-        .{ .name = "lmu", .root = "examples/lmu/main.zig" },
+    const example_common = b.addModule("example_common", .{
+        .root_source_file = b.path("examples/common/root.zig"),
+        .target = target,
+    });
+
+    const simulators = [_][]const u8{
+        "iracing",
+        "ac",
+        "acc",
+        "ace",
+        "acr",
+        "lmu",
     };
 
-    for (examples) |example| {
-        const exe = b.addExecutable(.{
-            .name = example.name,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(example.root),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "librace", .module = mod },
-                },
-            }),
-        });
-        b.installArtifact(exe);
-
-        const run_step = b.step(
-            b.fmt("run-{s}", .{example.name}),
-            b.fmt("Run the {s} telemetry example", .{example.name}),
-        );
-        const run_cmd = b.addRunArtifact(exe);
-        run_step.dependOn(&run_cmd.step);
-        run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+    for (simulators) |sim| {
+        addSimpleExample(b, mod, example_common, target, optimize, sim);
     }
+
+    addDashboardExample(b, mod, example_common, target, optimize, &simulators);
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
@@ -54,4 +39,135 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_mod_tests.step);
+}
+
+fn addSimpleExample(
+    b: *std.Build,
+    mod: *std.Build.Module,
+    example_common: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    sim: []const u8,
+) void {
+    const exe = b.addExecutable(.{
+        .name = sim,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}/simple.zig", .{sim})),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "librace", .module = mod },
+                .{ .name = "example_common", .module = example_common },
+            },
+        }),
+    });
+    b.installArtifact(exe);
+
+    const run_step = b.step(
+        b.fmt("run-{s}", .{sim}),
+        b.fmt("Run the {s} simple smoke-test example", .{sim}),
+    );
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+}
+
+fn addDashboardExample(
+    b: *std.Build,
+    mod: *std.Build.Module,
+    example_common: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    simulators: []const []const u8,
+) void {
+    const sim = b.option([]const u8, "sim", "Simulator short name for the dashboard example") orelse "iracing";
+
+    var sim_valid = false;
+    for (simulators) |name| {
+        if (std.mem.eql(u8, sim, name)) {
+            sim_valid = true;
+            break;
+        }
+    }
+    if (!sim_valid) {
+        std.debug.panic("unknown simulator '{s}' — expected one of: iracing, ac, acc, ace, acr, lmu", .{sim});
+    }
+
+    const implemented = std.mem.eql(u8, sim, "iracing");
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "short_name", sim);
+    build_options.addOption([]const u8, "simulator_name", simulatorDisplayName(sim));
+    build_options.addOption(bool, "implemented", implemented);
+
+    const exe = if (implemented) blk: {
+        const sim_module = b.addModule("sim", .{
+            .root_source_file = b.path(b.fmt("examples/{s}/dashboard.zig", .{sim})),
+            .target = target,
+            .imports = &.{
+                .{ .name = "librace", .module = mod },
+                .{ .name = "example_common", .module = example_common },
+            },
+        });
+
+        const iracing_connect = b.addModule("iracing_connect", .{
+            .root_source_file = b.path("examples/iracing/connect_error.zig"),
+            .target = target,
+        });
+        sim_module.addImport("iracing_connect", iracing_connect);
+
+        break :blk b.addExecutable(.{
+            .name = "dashboard",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/common/dashboard_main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "librace", .module = mod },
+                    .{ .name = "example_common", .module = example_common },
+                    .{ .name = "build_options", .module = build_options.createModule() },
+                    .{ .name = "sim", .module = sim_module },
+                },
+            }),
+        });
+    } else blk: {
+        break :blk b.addExecutable(.{
+            .name = "dashboard",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/common/dashboard_main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "librace", .module = mod },
+                    .{ .name = "example_common", .module = example_common },
+                    .{ .name = "build_options", .module = build_options.createModule() },
+                },
+            }),
+        });
+    };
+    b.installArtifact(exe);
+
+    const run_step = b.step(
+        "dashboard",
+        b.fmt("Run the shared dashboard example (sim={s})", .{sim}),
+    );
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+}
+
+fn simulatorDisplayName(short_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, short_name, "iracing")) return "iRacing";
+    if (std.mem.eql(u8, short_name, "ac")) return "Assetto Corsa";
+    if (std.mem.eql(u8, short_name, "acc")) return "Assetto Corsa Competizione";
+    if (std.mem.eql(u8, short_name, "ace")) return "Assetto Corsa Evo";
+    if (std.mem.eql(u8, short_name, "acr")) return "Assetto Corsa Rally";
+    if (std.mem.eql(u8, short_name, "lmu")) return "Le Mans Ultimate";
+    return short_name;
 }
