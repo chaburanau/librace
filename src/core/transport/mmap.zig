@@ -30,6 +30,18 @@ pub const SharedMemory = struct {
     };
 
     pub fn open(config: Config) OpenError!SharedMemory {
+        return openWithAccess(config, FILE_MAP_READ);
+    }
+
+    /// Open a named shared-memory region with read/write access.
+    ///
+    /// Most telemetry pages should be read-only. This exists for protocols like LMU's
+    /// shared spinlock, where readers coordinate copies by updating a tiny lock object.
+    pub fn openWritable(config: Config) OpenError!SharedMemory {
+        return openWithAccess(config, FILE_MAP_READ | FILE_MAP_WRITE);
+    }
+
+    fn openWithAccess(config: Config, access: windows.DWORD) OpenError!SharedMemory {
         if (builtin.os.tag != .windows) return error.UnsupportedPlatform;
 
         var name_utf16: [256]u16 = undefined;
@@ -37,11 +49,11 @@ pub const SharedMemory = struct {
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
-        const mapping = OpenFileMappingW(FILE_MAP_READ, @enumFromInt(0), name_w.ptr);
+        const mapping = OpenFileMappingW(access, @enumFromInt(0), name_w.ptr);
         if (mapping == windows.INVALID_HANDLE_VALUE) return error.NotFound;
 
         // Pass 0 to map the entire section (required when the object size differs from `config.size`).
-        const view_ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+        const view_ptr = MapViewOfFile(mapping, access, 0, 0, 0);
         if (view_ptr == null) {
             closeHandle(mapping);
             return error.MapFailed;
@@ -82,6 +94,15 @@ pub const NamedEvent = struct {
     };
 
     pub fn open(name: []const u8) OpenError!NamedEvent {
+        return openWithAccess(name, SYNCHRONIZE);
+    }
+
+    /// Open an event for waiting and signaling.
+    pub fn openSignal(name: []const u8) OpenError!NamedEvent {
+        return openWithAccess(name, SYNCHRONIZE | EVENT_MODIFY_STATE);
+    }
+
+    fn openWithAccess(name: []const u8, access: windows.DWORD) OpenError!NamedEvent {
         if (builtin.os.tag != .windows) return error.UnsupportedPlatform;
 
         var name_utf16: [256]u16 = undefined;
@@ -89,7 +110,7 @@ pub const NamedEvent = struct {
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
-        const handle = OpenEventW(SYNCHRONIZE, @enumFromInt(0), name_w.ptr) orelse return error.NotFound;
+        const handle = OpenEventW(access, @enumFromInt(0), name_w.ptr) orelse return error.NotFound;
         if (handle == windows.INVALID_HANDLE_VALUE) return error.NotFound;
         return .{ .handle = handle };
     }
@@ -98,6 +119,11 @@ pub const NamedEvent = struct {
     pub fn wait(self: *NamedEvent, timeout_ms: u32) bool {
         if (self.handle == windows.INVALID_HANDLE_VALUE) return false;
         return WaitForSingleObject(self.handle, timeout_ms) == WAIT_OBJECT_0;
+    }
+
+    pub fn set(self: *NamedEvent) bool {
+        if (self.handle == windows.INVALID_HANDLE_VALUE) return false;
+        return SetEvent(self.handle) != @as(windows.BOOL, @enumFromInt(0));
     }
 
     pub fn close(self: *NamedEvent) void {
@@ -109,7 +135,9 @@ pub const NamedEvent = struct {
 };
 
 const FILE_MAP_READ: windows.DWORD = 0x0004;
+const FILE_MAP_WRITE: windows.DWORD = 0x0002;
 const SYNCHRONIZE: windows.DWORD = 0x00100000;
+const EVENT_MODIFY_STATE: windows.DWORD = 0x0002;
 const WAIT_OBJECT_0: windows.DWORD = 0;
 
 extern "kernel32" fn OpenFileMappingW(
@@ -140,6 +168,8 @@ extern "kernel32" fn WaitForSingleObject(
     hHandle: windows.HANDLE,
     dwMilliseconds: windows.DWORD,
 ) callconv(.winapi) windows.DWORD;
+
+extern "kernel32" fn SetEvent(hEvent: windows.HANDLE) callconv(.winapi) windows.BOOL;
 
 test "open missing shared memory returns NotFound" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
