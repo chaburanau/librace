@@ -10,7 +10,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 |-----------|--------|-----------|--------|
 | iRacing | `librace.simulators.iracing` | Shared memory | **Implemented** |
 | Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | **Implemented** |
-| Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory + UDP | Planned |
+| Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory | **Implemented** |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | Planned |
@@ -55,6 +55,7 @@ zig build run-iracing
 # Shared terminal dashboard — pick simulator at build time
 zig build dashboard -Dsim=iracing
 zig build dashboard -Dsim=ac
+zig build dashboard -Dsim=acc
 zig build dashboard -Dsim=ace
 ```
 
@@ -173,6 +174,32 @@ while (client.poll() == .ok) {
     var buf: [96]u8 = undefined;
     const car = client.getString(ac.keys.static.car_model, &buf) orelse "?";
     _ = .{ speed_kmh, rpm, fuel, car };
+}
+```
+
+### Assetto Corsa Competizione
+
+ACC exposes three fixed shared-memory pages under the same map names as classic AC
+(`Local\acpmf_physics`, `Local\acpmf_graphics`, and `Local\acpmf_static`) but with
+ACC-specific struct layouts:
+
+```zig
+const acc = librace.simulators.acc;
+
+var client = try acc.connect(allocator);
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const p = client.physics();
+    const g = client.graphics();
+
+    const speed_kmh = p.speed_kmh;
+    const rpm = p.rpm;
+    const rain = g.rainIntensityValue().label();
+
+    var buf: [96]u8 = undefined;
+    const track = client.getString(acc.keys.static.track, &buf) orelse "?";
+    _ = .{ speed_kmh, rpm, rain, track };
 }
 ```
 
