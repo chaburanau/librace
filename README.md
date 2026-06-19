@@ -9,7 +9,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Simulator | Module | Transport | Status |
 |-----------|--------|-----------|--------|
 | iRacing | `librace.simulators.iracing` | Shared memory | **Implemented** |
-| Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | Planned |
+| Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | **Implemented** |
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory + UDP | Planned |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
@@ -54,6 +54,7 @@ zig build run-iracing
 
 # Shared terminal dashboard — pick simulator at build time
 zig build dashboard -Dsim=iracing
+zig build dashboard -Dsim=ac
 zig build dashboard -Dsim=ace
 ```
 
@@ -72,7 +73,7 @@ Simple example output (iRacing, when connected):
 OK track=Circuit des 24 Heures du Mans car=Ferrari 499P gear=3 speed_kmh=142.3 rpm=6500 vars=354
 ```
 
-Stub simulators print `FAIL not_implemented short_name=ac` and exit with code 1. The dashboard shows a placeholder when the selected provider is not implemented yet.
+Stub simulators print `FAIL not_implemented short_name=<name>` and exit with code 1. The dashboard shows a placeholder when the selected provider is not implemented yet.
 
 ### Simple build steps
 
@@ -148,6 +149,30 @@ while (client.poll() == .ok) {
     const track = client.trackName();
     const car = client.carModel();
     _ = .{ speed_kmh, rpm, fuel, track, car };
+}
+```
+
+### Assetto Corsa
+
+Assetto Corsa exposes three fixed shared-memory pages (`Local\acpmf_physics`,
+`Local\acpmf_graphics`, and `Local\acpmf_static`) with UTF-16 `wchar_t` strings:
+
+```zig
+const ac = librace.simulators.ac;
+
+var client = try ac.connect(allocator);
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const p = client.physics();
+    const speed_kmh = p.speed_kmh;
+    const rpm = p.rpms;
+
+    const fuel = client.getNumber(ac.keys.physics.fuel) orelse 0;
+
+    var buf: [96]u8 = undefined;
+    const car = client.getString(ac.keys.static.car_model, &buf) orelse "?";
+    _ = .{ speed_kmh, rpm, fuel, car };
 }
 ```
 
