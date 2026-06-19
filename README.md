@@ -13,14 +13,14 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory | **Implemented** |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
-| Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | Planned |
+| Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | **Implemented** |
 
 More titles will be added over time.
 
 ## Requirements
 
 - Zig 0.16.0 or newer
-- Windows (for iRacing shared-memory telemetry today)
+- Windows (for named shared-memory telemetry today)
 
 ## Project layout
 
@@ -57,6 +57,7 @@ zig build dashboard -Dsim=iracing
 zig build dashboard -Dsim=ac
 zig build dashboard -Dsim=acc
 zig build dashboard -Dsim=ace
+zig build dashboard -Dsim=lmu
 ```
 
 ### Example types
@@ -235,6 +236,32 @@ while (client.poll() == .ok) {
 > Note: AC Rally currently populates the physics page fully but leaves most of the graphics page
 > (status, lap timing) zeroed, so `isConnected` keys off the physics `packetId` rather than the
 > graphics `status` flag.
+
+### Le Mans Ultimate
+
+LMU exposes an official native shared-memory page (`LMU_Data`) with player telemetry, session
+scoring, and LMU-specific electronics fields. No third-party DLL is required on Windows; enable
+plugins in LMU's Gameplay settings.
+
+```zig
+const lmu = librace.simulators.lmu;
+
+var client = try lmu.connect(allocator);
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const t = client.telemetry();
+    const s = client.session();
+
+    const speed_kmh = t.speedKmh();
+    const rpm = t.engine_rpm;
+    const tc = t.tc;
+
+    var buf: [96]u8 = undefined;
+    const track = client.getString(lmu.keys.session.track_name, &buf) orelse "?";
+    _ = .{ speed_kmh, rpm, tc, s.current_et, track };
+}
+```
 
 See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 

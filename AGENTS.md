@@ -62,7 +62,7 @@ When adding a new title, use a short lowercase folder name and add it to `src/si
 
 Simulators expose telemetry through one or more channels:
 
-- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts, rF2-family titles.
+- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts, LMU native (`LMU_Data`), rF2-family plugin buffers.
 - **UDP** — ACC and others broadcast structured packets on configurable ports.
 - **Hybrid** — some titles use both; implement whichever channel is needed for complete data.
 - **Custom** — reserve `TransportKind.custom` for WebSocket, TCP, or proprietary APIs.
@@ -247,6 +247,6 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | `ac` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll |
 | `acr` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll (physics-`packetId` liveness; graphics page mostly unpopulated by the title) |
 | `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll |
-| `lmu` | Stub (`name` + `transport` constants) |
+| `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings, comptime field catalog, typed + generic access, live poll |
 
-Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles (LMU, etc.) will likely reuse patterns from the iRacing IRSDK section.
+Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles may reuse patterns from the iRacing IRSDK section or LMU's fixed-struct native shared-memory catalog, depending on their exposed telemetry interface.
