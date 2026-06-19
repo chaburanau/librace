@@ -12,7 +12,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Assetto Corsa (AC) | `librace.simulators.ac` | Shared memory | Planned |
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory + UDP | Planned |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
-| Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | Planned |
+| Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | Planned |
 
 More titles will be added over time.
@@ -150,6 +150,39 @@ while (client.poll() == .ok) {
     _ = .{ speed_kmh, rpm, fuel, track, car };
 }
 ```
+
+### Assetto Corsa Rally
+
+AC Rally reuses the classic Assetto Corsa shared-memory layout (`Local\acpmf_physics` /
+`acpmf_graphics` / `acpmf_static`) with `wchar_t` (UTF-16LE) strings. The client mirrors the
+AC Evo shape — typed struct access plus a generic name-based catalog — but string lookups take a
+caller buffer because the values are UTF-16:
+
+```zig
+const acr = librace.simulators.acr;
+
+var client = try acr.connect(allocator);
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    // Typed struct access over the fixed physics page.
+    const p = client.physics();
+    const speed_kmh = p.speed_kmh;
+    const rpm = p.rpms;
+
+    // Generic name-based access over the comptime field catalog.
+    const fuel = client.getNumber(acr.keys.physics.fuel) orelse 0;
+
+    // wchar_t strings decode into a caller-supplied UTF-8 buffer.
+    var buf: [96]u8 = undefined;
+    const car = client.getString(acr.keys.static.car_model, &buf) orelse "?";
+    _ = .{ speed_kmh, rpm, fuel, car };
+}
+```
+
+> Note: AC Rally currently populates the physics page fully but leaves most of the graphics page
+> (status, lap timing) zeroed, so `isConnected` keys off the physics `packetId` rather than the
+> graphics `status` flag.
 
 See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 
