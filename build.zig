@@ -98,7 +98,8 @@ fn addDashboardExample(
 
     const is_iracing = std.mem.eql(u8, sim, "iracing");
     const is_ace = std.mem.eql(u8, sim, "ace");
-    const implemented = is_iracing or is_ace;
+    const is_acr = std.mem.eql(u8, sim, "acr");
+    const implemented = is_iracing or is_ace or is_acr;
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "short_name", sim);
