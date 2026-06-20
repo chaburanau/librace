@@ -55,6 +55,7 @@ build.zig.zon
 | `ace` | Assetto Corsa Evo |
 | `acr` | Assetto Corsa Rally |
 | `lmu` | Le Mans Ultimate |
+| `fh6` | Forza Horizon 6 |
 
 When adding a new title, use a short lowercase folder name and add it to `src/simulators/root.zig`, `build.zig` (examples list), README, and this file.
 
@@ -248,5 +249,6 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | `acr` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll (physics-`packetId` liveness; graphics page mostly unpopulated by the title) |
 | `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll |
 | `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings, comptime field catalog, typed + generic access, live poll |
+| `fh6` | **Implemented** — UDP Data Out (324-byte Horizon dash packet), comptime field catalog, typed + generic access, live poll |
 
 Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles may reuse patterns from the iRacing IRSDK section or LMU's fixed-struct native shared-memory catalog, depending on their exposed telemetry interface.
