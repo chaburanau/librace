@@ -15,5 +15,7 @@ test {
     std.testing.refAllDecls(simulators.acc);
     std.testing.refAllDecls(simulators.ace);
     std.testing.refAllDecls(simulators.acr);
+    std.testing.refAllDecls(simulators.fh6);
     _ = @import("core/transport/mmap.zig");
+    _ = @import("core/transport/udp.zig");
 }
