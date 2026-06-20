@@ -341,19 +341,22 @@ pub fn run(
     ctx: anytype,
     comptime Provider: type,
 ) !void {
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_file_writer: std.Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
+    const stderr = &stderr_file_writer.interface;
+
+    Provider.connect(ctx) catch |err| {
+        try Provider.connectErrorHint(ctx, err, stderr);
+        try stderr.flush();
+        return err;
+    };
+    defer Provider.deinit(ctx);
+
     var stdout_buffer: [8192]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
 
     enterAltScreen(stdout);
-
-    Provider.connect(ctx) catch |err| {
-        try Provider.connectErrorHint(ctx, err, stdout);
-        try stdout.flush();
-        leaveAltScreen(stdout);
-        return;
-    };
-    defer Provider.deinit(ctx);
     defer leaveAltScreen(stdout);
 
     var stats: Stats = .{};
