@@ -10,10 +10,6 @@ pub const ConnectionState = enum {
 
 /// Transport mechanism used by a simulator to expose telemetry.
 pub const TransportKind = enum {
-    memory_mapped,
+    mmap,
     udp,
-    /// Simulators that expose telemetry through more than one channel.
-    hybrid,
-    /// Reserved for simulators with bespoke protocols (WebSocket, TCP, etc.).
-    custom,
 };

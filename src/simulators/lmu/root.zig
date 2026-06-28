@@ -13,7 +13,7 @@ pub const catalog = @import("catalog.zig");
 pub const keys = @import("keys.zig");
 
 pub const name = "Le Mans Ultimate";
-pub const transport = core.types.TransportKind.memory_mapped;
+pub const transport = core.types.TransportKind.mmap;
 
 pub const ConnectError = client.ConnectError;
 pub const PollStatus = client.PollStatus;

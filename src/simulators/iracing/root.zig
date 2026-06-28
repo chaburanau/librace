@@ -14,7 +14,7 @@ pub const catalog = @import("catalog.zig");
 pub const keys = @import("keys.zig");
 
 pub const name = "iRacing";
-pub const transport = core.types.TransportKind.memory_mapped;
+pub const transport = core.types.TransportKind.mmap;
 
 pub const ConnectError = client.ConnectError;
 pub const GetError = client.GetError;

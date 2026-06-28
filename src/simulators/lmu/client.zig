@@ -263,9 +263,10 @@ const SharedMemoryLock = struct {
     const busy_offset = 4;
 
     fn open() core.transport.mmap.SharedMemory.OpenError!SharedMemoryLock {
-        var mem = try core.transport.mmap.SharedMemory.openWritable(.{
+        var mem = try core.transport.mmap.SharedMemory.open(.{
             .name = protocol.lock_map_name,
             .size = size,
+            .access = .read_write,
         });
         errdefer mem.close();
         if (mem.view.len < size) return error.MapFailed;

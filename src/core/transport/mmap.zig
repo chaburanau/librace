@@ -10,12 +10,21 @@ const windows = std.os.windows;
 /// Default iRacing IRSDK shared-memory size (1164 KiB).
 pub const default_map_size = 1164 * 1024;
 
+/// Desired access mode when opening a shared-memory region.
+pub const Access = enum {
+    read_only,
+    read_write,
+};
+
 /// Shared-memory connection configuration.
 pub const Config = struct {
     /// Platform-specific name or path (e.g. `"Local\\IRSDKMemMapFileName"` on Windows).
     name: []const u8,
     /// Expected view length in bytes. The mapped slice is clamped to this when larger.
     size: usize = default_map_size,
+    /// Mapping access mode. Most telemetry pages should stay read-only; read/write is
+    /// needed for protocols like LMU's shared spinlock.
+    access: Access = .read_only,
 };
 
 /// Read-only view of a named shared-memory region (Windows only for now).
@@ -30,33 +39,25 @@ pub const SharedMemory = struct {
     };
 
     pub fn open(config: Config) OpenError!SharedMemory {
-        return openWithAccess(config, FILE_MAP_READ);
-    }
+        if (builtin.os.tag != .windows) return OpenError.UnsupportedPlatform;
 
-    /// Open a named shared-memory region with read/write access.
-    ///
-    /// Most telemetry pages should be read-only. This exists for protocols like LMU's
-    /// shared spinlock, where readers coordinate copies by updating a tiny lock object.
-    pub fn openWritable(config: Config) OpenError!SharedMemory {
-        return openWithAccess(config, FILE_MAP_READ | FILE_MAP_WRITE);
-    }
-
-    fn openWithAccess(config: Config, access: windows.DWORD) OpenError!SharedMemory {
-        if (builtin.os.tag != .windows) return error.UnsupportedPlatform;
+        const access = windowsFileMapAccess(config.access);
 
         var name_utf16: [256]u16 = undefined;
-        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, config.name) catch return error.UnsupportedPlatform;
+        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, config.name) catch return OpenError.UnsupportedPlatform;
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
         const mapping = OpenFileMappingW(access, @enumFromInt(0), name_w.ptr);
-        if (mapping == windows.INVALID_HANDLE_VALUE) return error.NotFound;
+        if (mapping == windows.INVALID_HANDLE_VALUE) {
+            return OpenError.NotFound;
+        }
 
         // Pass 0 to map the entire section (required when the object size differs from `config.size`).
         const view_ptr = MapViewOfFile(mapping, access, 0, 0, 0);
         if (view_ptr == null) {
-            closeHandle(mapping);
-            return error.MapFailed;
+            _ = CloseHandle(mapping);
+            return OpenError.MapFailed;
         }
 
         return .{
@@ -71,15 +72,11 @@ pub const SharedMemory = struct {
             self.view = &.{};
         }
         if (self.mapping != windows.INVALID_HANDLE_VALUE) {
-            closeHandle(self.mapping);
+            _ = CloseHandle(self.mapping);
             self.mapping = windows.INVALID_HANDLE_VALUE;
         }
     }
 };
-
-fn closeHandle(handle: windows.HANDLE) void {
-    _ = CloseHandle(handle);
-}
 
 /// Read-only handle to a named Windows auto/​manual-reset event (e.g. `Local\\IRSDKDataValidEvent`).
 ///
@@ -133,6 +130,13 @@ pub const NamedEvent = struct {
         }
     }
 };
+
+fn windowsFileMapAccess(access: Access) windows.DWORD {
+    return switch (access) {
+        .read_only => FILE_MAP_READ,
+        .read_write => FILE_MAP_READ | FILE_MAP_WRITE,
+    };
+}
 
 const FILE_MAP_READ: windows.DWORD = 0x0004;
 const FILE_MAP_WRITE: windows.DWORD = 0x0002;
