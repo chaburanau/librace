@@ -9,6 +9,7 @@ const catalog = @import("catalog.zig");
 pub const ConnectError = core.transport.udp.UdpListener.OpenError || error{
     OutOfMemory,
     Timeout,
+    RecvFailed,
 };
 
 pub const PollStatus = enum {
@@ -43,6 +44,7 @@ pub const Config = struct {
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     listener: core.transport.udp.UdpListener,
     config: Config,
     snapshot: *protocol.DashPacket,
@@ -50,16 +52,20 @@ pub const Client = struct {
     has_packet: bool = false,
     last_recv_ms: u64 = 0,
 
-    pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
-        return connectWithConfig(allocator, .{});
+    pub fn connect(allocator: std.mem.Allocator, io: std.Io) ConnectError!Client {
+        return connectWithConfig(allocator, io, .{});
     }
 
-    pub fn connectWithConfig(allocator: std.mem.Allocator, config: Config) ConnectError!Client {
-        var listener = try core.transport.udp.UdpListener.open(.{
+    pub fn connectWithConfig(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        config: Config,
+    ) ConnectError!Client {
+        var listener = try core.transport.udp.UdpListener.open(io, .{
             .address = config.address,
             .port = config.port,
         });
-        errdefer listener.close();
+        errdefer listener.close(io);
 
         const snapshot = try allocator.create(protocol.DashPacket);
         errdefer allocator.destroy(snapshot);
@@ -67,6 +73,7 @@ pub const Client = struct {
 
         return .{
             .allocator = allocator,
+            .io = io,
             .listener = listener,
             .config = config,
             .snapshot = snapshot,
@@ -74,16 +81,21 @@ pub const Client = struct {
     }
 
     /// Retry until a valid packet arrives or `timeout_ms` elapses (`null` = forever).
-    pub fn waitForConnection(allocator: std.mem.Allocator, timeout_ms: ?u32) ConnectError!Client {
-        return waitForConnectionWithConfig(allocator, .{}, timeout_ms);
+    pub fn waitForConnection(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        timeout_ms: ?u32,
+    ) ConnectError!Client {
+        return waitForConnectionWithConfig(allocator, io, .{}, timeout_ms);
     }
 
     pub fn waitForConnectionWithConfig(
         allocator: std.mem.Allocator,
+        io: std.Io,
         config: Config,
         timeout_ms: ?u32,
     ) ConnectError!Client {
-        var client = try connectWithConfig(allocator, config);
+        var client = try connectWithConfig(allocator, io, config);
         errdefer client.deinit();
 
         std.debug.print(
@@ -91,27 +103,16 @@ pub const Client = struct {
             .{ config.address, config.port },
         );
 
-        const step_ms: u32 = 50;
-        var elapsed_ms: u32 = 0;
-        while (!client.has_packet) {
-            _ = client.drainSocket();
-            if (client.has_packet) return client;
-            if (timeout_ms) |t| {
-                if (elapsed_ms >= t) return error.Timeout;
-            }
-            sleepMs(step_ms);
-            elapsed_ms +|= step_ms;
-        }
-        return client;
+        return waitForFirstPacket(&client, timeout_ms);
+    }
+
+    pub fn boundPort(self: *const Client) u16 {
+        return self.listener.boundPort();
     }
 
     pub fn deinit(self: *Client) void {
         self.allocator.destroy(self.snapshot);
-        self.listener.close();
-    }
-
-    pub fn boundPort(self: *const Client) u16 {
-        return self.listener.bound_port;
+        self.listener.close(self.io);
     }
 
     pub fn isConnected(self: *const Client) bool {
@@ -119,11 +120,16 @@ pub const Client = struct {
         return monotonicMs() -% self.last_recv_ms < self.config.stale_threshold_ms;
     }
 
-    /// Receive the latest datagram and copy it into the owned packet snapshot.
+    /// Blocks until a datagram arrives, then copies the latest valid packet into the snapshot.
     pub fn poll(self: *Client) PollStatus {
-        if (self.drainSocket()) return .ok;
-        if (self.isConnected()) return .stale;
-        return .disconnected;
+        while (true) {
+            const msg = self.listener.recv(self.io, &self.recv_buf) catch return .disconnected;
+            if (protocol.decodePacket(msg.data, self.snapshot)) {
+                self.has_packet = true;
+                self.last_recv_ms = monotonicMs();
+                return .ok;
+            }
+        }
     }
 
     pub fn packet(self: *const Client) *const protocol.DashPacket {
@@ -164,37 +170,48 @@ pub const Client = struct {
     pub fn read(self: *const Client, handle: FieldHandle) ?f64 {
         return catalog.decodeNumber(handle.descriptor, std.mem.asBytes(self.snapshot));
     }
+};
 
-    fn drainSocket(self: *Client) bool {
-        var got = false;
-        while (true) {
-            const len = self.listener.tryRecv(&self.recv_buf) catch break;
-            const n = len orelse break;
-            if (protocol.decodePacket(self.recv_buf[0..n], self.snapshot)) {
-                self.has_packet = true;
-                self.last_recv_ms = monotonicMs();
-                got = true;
+/// Waits for the first valid packet using a receiver thread so the caller can
+/// enforce `timeout_ms` while `UdpListener.recv` blocks.
+fn waitForFirstPacket(client: *Client, timeout_ms: ?u32) ConnectError!Client {
+    const recv_thread = std.Thread.spawn(.{}, recvWaitThread, .{client}) catch return error.RecvFailed;
+    defer recv_thread.join();
+
+    const step_ms: u32 = 50;
+    var elapsed_ms: u32 = 0;
+    while (!client.has_packet) {
+        if (timeout_ms) |t| {
+            if (elapsed_ms >= t) {
+                client.listener.close(client.io);
+                return error.Timeout;
             }
         }
-        return got;
+        std.Io.sleep(client.io, std.Io.Duration.fromMilliseconds(step_ms), .real) catch {};
+        elapsed_ms +|= step_ms;
     }
-};
+    return client.*;
+}
+
+fn recvWaitThread(client: *Client) void {
+    while (!client.has_packet) {
+        const msg = client.listener.recv(client.io, &client.recv_buf) catch return;
+        if (protocol.decodePacket(msg.data, client.snapshot)) {
+            client.has_packet = true;
+            client.last_recv_ms = monotonicMs();
+            return;
+        }
+    }
+}
 
 fn monotonicMs() u64 {
     if (@import("builtin").os.tag == .windows) {
         return GetTickCount64();
     }
-    return 0;
-}
-
-fn sleepMs(ms: u32) void {
-    if (@import("builtin").os.tag == .windows) {
-        Sleep(ms);
-    }
+    return @intCast(std.time.milliTimestamp());
 }
 
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
-extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
 
 test "generic access over an owned packet snapshot" {
     const allocator = std.testing.allocator;
@@ -207,6 +224,7 @@ test "generic access over an owned packet snapshot" {
 
     var client = Client{
         .allocator = allocator,
+        .io = std.testing.io,
         .listener = undefined,
         .config = .{},
         .snapshot = snapshot,
@@ -219,8 +237,7 @@ test "generic access over an owned packet snapshot" {
 }
 
 test "connect binds a UDP listener" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
-    var client = try Client.connect(std.testing.allocator);
+    var client = try Client.connect(std.testing.allocator, std.testing.io);
     defer client.deinit();
     try std.testing.expectEqual(protocol.default_port, client.boundPort());
 }

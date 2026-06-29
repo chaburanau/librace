@@ -9,7 +9,7 @@ const connect_error = @import("connect_error.zig");
 const Context = struct {
     client: ?ir.Client = null,
 
-    pub fn connect(ctx: *Context) !void {
+    pub fn connect(ctx: *Context, _: std.Io) !void {
         ctx.client = try ir.connect(std.heap.page_allocator);
     }
 

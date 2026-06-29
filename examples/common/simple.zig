@@ -81,7 +81,7 @@ pub fn run(
     try stdout.print("Transport: {s}\n", .{cfg.transport});
     try stdout.flush();
 
-    Hooks.connect(ctx) catch |err| {
+    Hooks.connect(ctx, io) catch |err| {
         if (err == error.NotImplemented) {
             try stdout.print("FAIL not_implemented short_name={s}\n", .{cfg.short_name});
             try stdout.flush();

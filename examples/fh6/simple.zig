@@ -9,8 +9,8 @@ const Context = struct {
     client: ?fh6.Client = null,
     car_buf: [64]u8 = undefined,
 
-    pub fn connect(ctx: *Context) !void {
-        ctx.client = try fh6.waitForConnection(std.heap.page_allocator, 30_000);
+    pub fn connect(ctx: *Context, io: std.Io) !void {
+        ctx.client = try fh6.waitForConnection(std.heap.page_allocator, io, 30_000);
     }
 
     pub fn deinit(ctx: *Context) void {

@@ -345,7 +345,7 @@ pub fn run(
     var stderr_file_writer: std.Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
     const stderr = &stderr_file_writer.interface;
 
-    Provider.connect(ctx) catch |err| {
+    Provider.connect(ctx, io) catch |err| {
         try Provider.connectErrorHint(ctx, err, stderr);
         try stderr.flush();
         return err;

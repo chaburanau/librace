@@ -33,24 +33,25 @@ pub const DrivetrainType = protocol.DrivetrainType;
 pub const default_port = protocol.default_port;
 pub const packet_size = protocol.packet_size;
 
-pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
-    return Client.connect(allocator);
+pub fn connect(allocator: std.mem.Allocator, io: std.Io) ConnectError!Client {
+    return Client.connect(allocator, io);
 }
 
-pub fn connectWithConfig(allocator: std.mem.Allocator, config: Config) ConnectError!Client {
-    return Client.connectWithConfig(allocator, config);
+pub fn connectWithConfig(allocator: std.mem.Allocator, io: std.Io, config: Config) ConnectError!Client {
+    return Client.connectWithConfig(allocator, io, config);
 }
 
-pub fn waitForConnection(allocator: std.mem.Allocator, timeout_ms: ?u32) ConnectError!Client {
-    return Client.waitForConnection(allocator, timeout_ms);
+pub fn waitForConnection(allocator: std.mem.Allocator, io: std.Io, timeout_ms: ?u32) ConnectError!Client {
+    return Client.waitForConnection(allocator, io, timeout_ms);
 }
 
 pub fn waitForConnectionWithConfig(
     allocator: std.mem.Allocator,
+    io: std.Io,
     config: Config,
     timeout_ms: ?u32,
 ) ConnectError!Client {
-    return Client.waitForConnectionWithConfig(allocator, config, timeout_ms);
+    return Client.waitForConnectionWithConfig(allocator, io, config, timeout_ms);
 }
 
 test {

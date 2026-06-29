@@ -21,8 +21,8 @@ pub const Context = struct {
     discovery_buf: [64]u8 = undefined,
 };
 
-pub fn connect(ctx: *Context) !void {
-    ctx.client = try fh6.waitForConnection(std.heap.page_allocator, connect_timeout_ms);
+pub fn connect(ctx: *Context, io: std.Io) !void {
+    ctx.client = try fh6.waitForConnection(std.heap.page_allocator, io, connect_timeout_ms);
 }
 
 pub fn deinit(ctx: *Context) void {

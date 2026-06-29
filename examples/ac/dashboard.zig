@@ -22,7 +22,7 @@ pub const Context = struct {
     discovery_buf: [48]u8 = undefined,
 };
 
-pub fn connect(ctx: *Context) !void {
+pub fn connect(ctx: *Context, _: std.Io) !void {
     ctx.client = try ac.connect(std.heap.page_allocator);
 }
 

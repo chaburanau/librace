@@ -8,7 +8,7 @@ const simple = example_common.simple;
 const Context = struct {
     client: ?ace.Client = null,
 
-    pub fn connect(ctx: *Context) !void {
+    pub fn connect(ctx: *Context, _: std.Io) !void {
         ctx.client = try ace.connect(std.heap.page_allocator);
     }
 
