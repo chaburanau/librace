@@ -172,7 +172,7 @@ pub const Client = struct {
             .allocator = allocator,
             .catalog = catalog,
             .row_buffer = row_buffer,
-            .data_valid_event = core.transport.mmap.NamedEvent.open(protocol.data_valid_event_name) catch null,
+            .data_valid_event = core.transport.mmap.NamedEvent.open(.{ .name = protocol.data_valid_event_name }) catch null,
         };
         _ = client.copyLatestRow();
         return client;

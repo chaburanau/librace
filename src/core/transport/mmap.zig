@@ -82,6 +82,18 @@ pub const SharedMemory = struct {
 ///
 /// Optional: read-only telemetry clients can poll instead, but waiting on the event lets a
 /// consumer block until the simulator signals new data rather than busy-spinning.
+pub const EventAccess = enum {
+    wait,
+    signal,
+};
+
+pub const EventConfig = struct {
+    /// Platform-specific event name (e.g. `"Local\\IRSDKDataValidEvent"` on Windows).
+    name: []const u8,
+    /// `.wait` allows blocking until signaled; `.signal` also allows calling `set`.
+    access: EventAccess = .wait,
+};
+
 pub const NamedEvent = struct {
     handle: windows.HANDLE = windows.INVALID_HANDLE_VALUE,
 
@@ -90,25 +102,18 @@ pub const NamedEvent = struct {
         NotFound,
     };
 
-    pub fn open(name: []const u8) OpenError!NamedEvent {
-        return openWithAccess(name, SYNCHRONIZE);
-    }
+    pub fn open(config: EventConfig) OpenError!NamedEvent {
+        if (builtin.os.tag != .windows) return OpenError.UnsupportedPlatform;
 
-    /// Open an event for waiting and signaling.
-    pub fn openSignal(name: []const u8) OpenError!NamedEvent {
-        return openWithAccess(name, SYNCHRONIZE | EVENT_MODIFY_STATE);
-    }
-
-    fn openWithAccess(name: []const u8, access: windows.DWORD) OpenError!NamedEvent {
-        if (builtin.os.tag != .windows) return error.UnsupportedPlatform;
+        const access = windowsEventAccess(config.access);
 
         var name_utf16: [256]u16 = undefined;
-        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, name) catch return error.UnsupportedPlatform;
+        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, config.name) catch return OpenError.UnsupportedPlatform;
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
-        const handle = OpenEventW(access, @enumFromInt(0), name_w.ptr) orelse return error.NotFound;
-        if (handle == windows.INVALID_HANDLE_VALUE) return error.NotFound;
+        const handle = OpenEventW(access, @enumFromInt(0), name_w.ptr) orelse return OpenError.NotFound;
+        if (handle == windows.INVALID_HANDLE_VALUE) return OpenError.NotFound;
         return .{ .handle = handle };
     }
 
@@ -135,6 +140,13 @@ fn windowsFileMapAccess(access: Access) windows.DWORD {
     return switch (access) {
         .read_only => FILE_MAP_READ,
         .read_write => FILE_MAP_READ | FILE_MAP_WRITE,
+    };
+}
+
+fn windowsEventAccess(access: EventAccess) windows.DWORD {
+    return switch (access) {
+        .wait => SYNCHRONIZE,
+        .signal => SYNCHRONIZE | EVENT_MODIFY_STATE,
     };
 }
 

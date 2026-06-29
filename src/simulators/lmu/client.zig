@@ -56,7 +56,7 @@ pub const Client = struct {
         var lock: ?SharedMemoryLock = SharedMemoryLock.open() catch null;
         errdefer if (lock) |*l| l.close();
 
-        var data_event = core.transport.mmap.NamedEvent.open(protocol.data_event_name) catch null;
+        var data_event = core.transport.mmap.NamedEvent.open(.{ .name = protocol.data_event_name }) catch null;
         errdefer if (data_event) |*ev| ev.close();
 
         const telem = try allocator.create(protocol.TelemInfoV01);
@@ -271,7 +271,10 @@ const SharedMemoryLock = struct {
         errdefer mem.close();
         if (mem.view.len < size) return error.MapFailed;
 
-        const event = core.transport.mmap.NamedEvent.openSignal(protocol.lock_event_name) catch null;
+        const event = core.transport.mmap.NamedEvent.open(.{
+            .name = protocol.lock_event_name,
+            .access = .signal,
+        }) catch null;
         return .{ .mem = mem, .event = event };
     }
 
