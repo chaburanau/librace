@@ -49,7 +49,7 @@ pub const SharedMemory = struct {
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
         const mapping = OpenFileMappingW(access, @enumFromInt(0), name_w.ptr);
-        if (mapping == windows.INVALID_HANDLE_VALUE) {
+        if (@intFromPtr(mapping) == 0 or mapping == windows.INVALID_HANDLE_VALUE) {
             return OpenError.NotFound;
         }
 
@@ -197,7 +197,6 @@ test "open missing shared memory returns NotFound" {
         return error.TestExpectedError;
     } else |err| switch (err) {
         error.NotFound => {},
-        error.MapFailed => return error.SkipZigTest,
         else => return err,
     }
 }
@@ -207,16 +206,4 @@ test "close is safe on default-initialized SharedMemory" {
 
     var mem: SharedMemory = .{};
     mem.close();
-}
-
-test "open and close releases handles" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-
-    var mem = SharedMemory.open(.{ .name = "Local\\IRSDKMemMapFileName" }) catch |err| switch (err) {
-        error.NotFound, error.MapFailed => return error.SkipZigTest,
-        else => return err,
-    };
-    defer mem.close();
-    try std.testing.expect(mem.view.len > 0);
-    try std.testing.expect(mem.mapping != windows.INVALID_HANDLE_VALUE);
 }

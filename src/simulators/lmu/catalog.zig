@@ -131,7 +131,22 @@ pub const vehicle_fields = buildCatalog(protocol.VehicleScoringInfoV01, .vehicle
 pub const all_fields = telem_fields ++ session_fields ++ vehicle_fields;
 pub const field_count = all_fields.len;
 
+/// When the same field name appears on multiple pages, generic lookup uses a canonical page.
+fn canonicalPage(name: []const u8) ?Page {
+    if (std.mem.eql(u8, name, "track_name")) return .session;
+    if (std.mem.eql(u8, name, "vehicle_name")) return .telem;
+    return null;
+}
+
+pub fn findIn(page: Page, name: []const u8) ?FieldDescriptor {
+    for (all_fields) |f| {
+        if (f.page == page and std.mem.eql(u8, f.name, name)) return f;
+    }
+    return null;
+}
+
 pub fn find(name: []const u8) ?FieldDescriptor {
+    if (canonicalPage(name)) |page| return findIn(page, name);
     for (all_fields) |f| {
         if (std.mem.eql(u8, f.name, name)) return f;
     }
@@ -200,8 +215,10 @@ test "catalog metadata matches LMU struct offsets" {
     try std.testing.expectEqual(@as(usize, 356), rpm.offset);
 
     const track = find("track_name").?;
+    try std.testing.expectEqual(Page.session, track.page);
     try std.testing.expectEqual(FieldType.cstring, track.field_type);
     try std.testing.expectEqual(@as(usize, 64), track.count);
+    try std.testing.expectEqual(@as(usize, 0), track.offset);
 
     const best = find("best_lap_time").?;
     try std.testing.expectEqual(Page.vehicle, best.page);

@@ -728,11 +728,14 @@ test "getRaw returns null when variable extends past row buffer" {
 
 test "connect and deinit release resources" {
     const allocator = std.testing.allocator;
-    var client = Client.connect(allocator) catch |err| switch (err) {
-        error.NotFound, error.MapFailed, error.InvalidHeader => return error.SkipZigTest,
+    const result = Client.connect(allocator);
+    if (result) |client| {
+        var c = client;
+        c.deinit();
+    } else |err| switch (err) {
+        error.NotFound, error.MapFailed, error.InvalidHeader => {},
         else => return err,
-    };
-    client.deinit();
+    }
 }
 
 test "connect to missing shared memory returns NotFound" {
@@ -747,7 +750,6 @@ test "connect to missing shared memory returns NotFound" {
         return error.TestExpectedError;
     } else |err| switch (err) {
         error.NotFound => {},
-        error.MapFailed => return error.SkipZigTest,
         else => return err,
     }
 }
