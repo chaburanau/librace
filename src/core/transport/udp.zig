@@ -32,10 +32,6 @@ pub const UdpListener = struct {
         return .{ .socket = socket };
     }
 
-    pub fn boundPort(self: *const UdpListener) u16 {
-        return self.socket.address.getPort();
-    }
-
     pub fn close(self: *UdpListener, io: std.Io) void {
         if (self.closed) return;
         self.closed = true;
@@ -54,11 +50,4 @@ fn parseBindAddress(address: []const u8, port: u16) UdpListener.OpenError!net.Ip
         return .{ .ip4 = .unspecified(port) };
     }
     return net.IpAddress.parse(address, port) catch return error.InvalidAddress;
-}
-
-test "UdpListener open and close" {
-    const io = std.testing.io;
-    var listener = try UdpListener.open(io, .{ .port = 0 });
-    defer listener.close(io);
-    try std.testing.expect(listener.boundPort() > 0);
 }

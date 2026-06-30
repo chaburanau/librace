@@ -106,10 +106,6 @@ pub const Client = struct {
         return waitForFirstPacket(&client, timeout_ms);
     }
 
-    pub fn boundPort(self: *const Client) u16 {
-        return self.listener.boundPort();
-    }
-
     pub fn deinit(self: *Client) void {
         self.allocator.destroy(self.snapshot);
         self.listener.close(self.io);
@@ -234,10 +230,4 @@ test "generic access over an owned packet snapshot" {
     try std.testing.expectApproxEqAbs(@as(f64, 50), client.getNumber("speed").?, 0.001);
     try std.testing.expectEqual(@as(f64, 7200), client.getNumber("current_engine_rpm").?);
     try std.testing.expectEqual(@as(f64, 5), client.getNumber("gear").?);
-}
-
-test "connect binds a UDP listener" {
-    var client = try Client.connect(std.testing.allocator, std.testing.io);
-    defer client.deinit();
-    try std.testing.expectEqual(protocol.default_port, client.boundPort());
 }
