@@ -56,7 +56,7 @@ pub const SharedMemory = struct {
         // Pass 0 to map the entire section (required when the object size differs from `config.size`).
         const view_ptr = MapViewOfFile(mapping, access, 0, 0, 0);
         if (view_ptr == null) {
-            _ = CloseHandle(mapping);
+            windows.CloseHandle(mapping);
             return OpenError.MapFailed;
         }
 
@@ -72,7 +72,7 @@ pub const SharedMemory = struct {
             self.view = &.{};
         }
         if (self.mapping != windows.INVALID_HANDLE_VALUE) {
-            _ = CloseHandle(self.mapping);
+            windows.CloseHandle(self.mapping);
             self.mapping = windows.INVALID_HANDLE_VALUE;
         }
     }
@@ -130,7 +130,7 @@ pub const NamedEvent = struct {
 
     pub fn close(self: *NamedEvent) void {
         if (self.handle != windows.INVALID_HANDLE_VALUE) {
-            _ = CloseHandle(self.handle);
+            windows.CloseHandle(self.handle);
             self.handle = windows.INVALID_HANDLE_VALUE;
         }
     }
@@ -171,8 +171,6 @@ extern "kernel32" fn MapViewOfFile(
 ) callconv(.winapi) ?*anyopaque;
 
 extern "kernel32" fn UnmapViewOfFile(lpBaseAddress: ?*anyopaque) callconv(.winapi) windows.BOOL;
-
-extern "kernel32" fn CloseHandle(hObject: windows.HANDLE) callconv(.winapi) windows.BOOL;
 
 extern "kernel32" fn OpenEventW(
     dwDesiredAccess: windows.DWORD,
