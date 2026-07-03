@@ -17,6 +17,7 @@ pub const name = "iRacing";
 pub const transport = core.types.TransportKind.mmap;
 
 pub const ConnectError = client.ConnectError;
+pub const ConnectOptions = core.connect.Options;
 pub const GetError = client.GetError;
 pub const CoerceError = client.CoerceError;
 pub const ReadError = client.ReadError;
@@ -32,17 +33,15 @@ pub const SessionSectionIterator = client.SessionSectionIterator;
 
 pub const mem_map_name = protocol.mem_map_name;
 
-pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
-    return Client.connect(allocator);
+pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions) ConnectError!Client {
+    return core.connect.retry(Client, ConnectError, std.mem.Allocator, io, allocator, options, Client.connect, isRetryableConnectError);
 }
 
-/// Retry connecting until the sim is available or `timeout_ms` elapses (`null` = forever).
-pub fn waitForConnection(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    timeout_ms: ?u32,
-) ConnectError!Client {
-    return Client.waitForConnection(allocator, io, timeout_ms);
+fn isRetryableConnectError(err: ConnectError) bool {
+    return switch (err) {
+        error.NotFound, error.InvalidHeader => true,
+        else => false,
+    };
 }
 
 test {

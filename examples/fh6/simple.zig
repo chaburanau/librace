@@ -4,13 +4,15 @@ const example_common = @import("example_common");
 
 const fh6 = librace.simulators.fh6;
 const simple = example_common.simple;
+const connect_timeout = std.Io.Duration.fromSeconds(30);
+const poll_timeout = std.Io.Duration.fromSeconds(30);
 
 const Context = struct {
     client: ?fh6.Client = null,
     car_buf: [64]u8 = undefined,
 
     pub fn connect(ctx: *Context, io: std.Io) !void {
-        ctx.client = try fh6.waitForConnection(std.heap.page_allocator, io, 30_000);
+        ctx.client = try fh6.connect(std.heap.page_allocator, io, .{ .timeout = connect_timeout });
     }
 
     pub fn deinit(ctx: *Context) void {
@@ -19,11 +21,11 @@ const Context = struct {
     }
 
     pub fn isConnected(ctx: *Context) bool {
-        return ctx.client.?.isConnected();
+        return ctx.client != null;
     }
 
     pub fn poll(ctx: *Context) bool {
-        return ctx.client.?.poll().isOk();
+        return ctx.client.?.poll(poll_timeout).isOk();
     }
 
     pub fn varCount(ctx: *Context) usize {
@@ -49,11 +51,11 @@ const Context = struct {
                 .{fh6.default_port},
             ),
             error.Timeout => try w.print(
-                "No FH6 Data Out packets received on port {d} within 30s.\n",
+                "UDP port {d} did not become available within 30s.\n",
                 .{fh6.default_port},
             ),
             else => try w.print(
-                "Enable Data Out in FH6 (Settings → HUD and Gameplay), set IP to 127.0.0.1 and port to {d}, then drive.\n",
+                "Enable Data Out in FH6 (Settings -> HUD and Gameplay), set IP to 127.0.0.1 and port to {d}, then drive.\n",
                 .{fh6.default_port},
             ),
         }

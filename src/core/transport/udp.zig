@@ -43,6 +43,17 @@ pub const UdpListener = struct {
     pub fn recv(self: *const UdpListener, io: std.Io, buffer: []u8) net.Socket.ReceiveError!net.IncomingMessage {
         return self.socket.receive(io, buffer);
     }
+
+    /// Waits up to `timeout` for a datagram. Payload is written into `buffer`;
+    /// the returned slice aliases `buffer`.
+    pub fn recvTimeout(
+        self: *const UdpListener,
+        io: std.Io,
+        buffer: []u8,
+        timeout: std.Io.Duration,
+    ) net.Socket.ReceiveTimeoutError!net.IncomingMessage {
+        return self.socket.receiveTimeout(io, buffer, .{ .duration = .{ .raw = timeout, .clock = .real } });
+    }
 };
 
 fn parseBindAddress(address: []const u8, port: u16) UdpListener.OpenError!net.IpAddress {

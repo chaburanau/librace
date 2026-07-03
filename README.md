@@ -98,8 +98,11 @@ Add librace as a dependency in your `build.zig.zon`, then import the module in y
 const librace = @import("librace");
 const ir = librace.simulators.iracing;
 
-var client = try ir.connect(allocator);
+var client = try ir.connect(allocator, io, .{});
 defer client.deinit();
+
+// To wait for the simulator to start:
+// var client = try ir.connect(allocator, io, .{ .timeout = std.Io.Duration.fromSeconds(30) });
 
 while (client.poll() == .ok) {
     // Strict typed read, or lenient numeric read.
@@ -135,7 +138,7 @@ gives typed struct access alongside generic name-based lookup and discovery:
 ```zig
 const ace = librace.simulators.ace;
 
-var client = try ace.connect(allocator);
+var client = try ace.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -162,7 +165,7 @@ Assetto Corsa exposes three fixed shared-memory pages (`Local\acpmf_physics`,
 ```zig
 const ac = librace.simulators.ac;
 
-var client = try ac.connect(allocator);
+var client = try ac.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -187,7 +190,7 @@ ACC-specific struct layouts:
 ```zig
 const acc = librace.simulators.acc;
 
-var client = try acc.connect(allocator);
+var client = try acc.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -214,7 +217,7 @@ caller buffer because the values are UTF-16:
 ```zig
 const acr = librace.simulators.acr;
 
-var client = try acr.connect(allocator);
+var client = try acr.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -246,7 +249,7 @@ plugins in LMU's Gameplay settings.
 ```zig
 const lmu = librace.simulators.lmu;
 
-var client = try lmu.connect(allocator);
+var client = try lmu.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {

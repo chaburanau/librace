@@ -10,6 +10,7 @@ pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     /// A required page mapped but is smaller than its documented struct.
     InvalidData,
     OutOfMemory,
+    Timeout,
 };
 
 /// Result of a single [`Client.poll`].
@@ -107,30 +108,6 @@ pub const Client = struct {
         };
         _ = client.copyAll();
         return client;
-    }
-
-    /// Retry `connect` until the sim is available or `timeout_ms` elapses (`null` = forever).
-    pub fn waitForConnection(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        timeout_ms: ?u32,
-    ) ConnectError!Client {
-        const step_ms: u32 = 200;
-        var elapsed_ms: u32 = 0;
-        while (true) {
-            if (Client.connect(allocator)) |client| {
-                return client;
-            } else |err| switch (err) {
-                error.NotFound, error.InvalidData => {
-                    if (timeout_ms) |t| {
-                        if (elapsed_ms >= t) return err;
-                    }
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(step_ms), .real) catch {};
-                    elapsed_ms +|= step_ms;
-                },
-                else => return err,
-            }
-        }
     }
 
     pub fn deinit(self: *Client) void {

@@ -22,6 +22,7 @@ pub const ConnectError = client.ConnectError;
 pub const PollStatus = client.PollStatus;
 pub const Client = client.Client;
 pub const Config = client.Config;
+pub const ConnectOptions = client.ConnectOptions;
 pub const FieldRaw = client.FieldRaw;
 pub const FieldHandle = client.FieldHandle;
 pub const FieldDescriptor = client.FieldDescriptor;
@@ -33,25 +34,32 @@ pub const DrivetrainType = protocol.DrivetrainType;
 pub const default_port = protocol.default_port;
 pub const packet_size = protocol.packet_size;
 
-pub fn connect(allocator: std.mem.Allocator, io: std.Io) ConnectError!Client {
-    return Client.connect(allocator, io);
+pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions) ConnectError!Client {
+    return core.connect.retry(Client, ConnectError, ConnectContext, io, .{
+        .allocator = allocator,
+        .io = io,
+        .config = options.config,
+    }, .{
+        .timeout = options.timeout,
+        .retry_interval = options.retry_interval,
+    }, connectOnce, isRetryableConnectError);
 }
 
-pub fn connectWithConfig(allocator: std.mem.Allocator, io: std.Io, config: Config) ConnectError!Client {
-    return Client.connectWithConfig(allocator, io, config);
-}
-
-pub fn waitForConnection(allocator: std.mem.Allocator, io: std.Io, timeout_ms: ?u32) ConnectError!Client {
-    return Client.waitForConnection(allocator, io, timeout_ms);
-}
-
-pub fn waitForConnectionWithConfig(
+const ConnectContext = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     config: Config,
-    timeout_ms: ?u32,
-) ConnectError!Client {
-    return Client.waitForConnectionWithConfig(allocator, io, config, timeout_ms);
+};
+
+fn connectOnce(ctx: ConnectContext) ConnectError!Client {
+    return Client.connect(ctx.allocator, ctx.io, ctx.config);
+}
+
+fn isRetryableConnectError(err: ConnectError) bool {
+    return switch (err) {
+        error.AddressInUse => true,
+        else => false,
+    };
 }
 
 test {

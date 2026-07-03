@@ -11,8 +11,9 @@ pub const title = "Forza Horizon 6 | librace";
 const rad_to_deg: f64 = 180.0 / std.math.pi;
 const steer_to_deg: f64 = 900.0 / 127.0;
 
-/// Allow time to alt-tab into FH6 and start driving before giving up.
-const connect_timeout_ms: u32 = 120_000;
+/// Allow time for a conflicting telemetry app to release the UDP port before giving up.
+const connect_timeout = std.Io.Duration.fromSeconds(120);
+const poll_timeout = std.Io.Duration.fromMilliseconds(500);
 
 pub const Context = struct {
     client: ?fh6.Client = null,
@@ -22,7 +23,7 @@ pub const Context = struct {
 };
 
 pub fn connect(ctx: *Context, io: std.Io) !void {
-    ctx.client = try fh6.waitForConnection(std.heap.page_allocator, io, connect_timeout_ms);
+    ctx.client = try fh6.connect(std.heap.page_allocator, io, .{ .timeout = connect_timeout });
 }
 
 pub fn deinit(ctx: *Context) void {
@@ -31,11 +32,11 @@ pub fn deinit(ctx: *Context) void {
 }
 
 pub fn isConnected(ctx: *Context) bool {
-    return ctx.client.?.isConnected();
+    return ctx.client != null;
 }
 
 pub fn poll(ctx: *Context) bool {
-    return ctx.client.?.poll().isOk();
+    return ctx.client.?.poll(poll_timeout).isOk();
 }
 
 pub fn connectErrorHint(_: *Context, err: anyerror, w: *std.Io.Writer) !void {
@@ -46,8 +47,8 @@ pub fn connectErrorHint(_: *Context, err: anyerror, w: *std.Io.Writer) !void {
             .{fh6.default_port},
         ),
         error.Timeout => try w.print(
-            "No packets on port {d} within {d}s — enable Data Out, set IP 127.0.0.1 port {d}, then drive.\n",
-            .{ fh6.default_port, connect_timeout_ms / 1000, fh6.default_port },
+            "UDP port {d} did not become available within {d}s.\n",
+            .{ fh6.default_port, connect_timeout.toSeconds() },
         ),
         else => try w.print(
             "Settings → HUD and Gameplay → Data Out: On, IP 127.0.0.1, port {d}.\n",

@@ -117,10 +117,10 @@ pub const NamedEvent = struct {
         return .{ .handle = handle };
     }
 
-    /// Block up to `timeout_ms` for the event to be signaled. Returns true when signaled.
-    pub fn wait(self: *NamedEvent, timeout_ms: u32) bool {
+    /// Block up to `timeout` for the event to be signaled. Returns true when signaled.
+    pub fn wait(self: *NamedEvent, timeout: std.Io.Duration) bool {
         if (self.handle == windows.INVALID_HANDLE_VALUE) return false;
-        return WaitForSingleObject(self.handle, timeout_ms) == WAIT_OBJECT_0;
+        return WaitForSingleObject(self.handle, durationToWindowsMilliseconds(timeout)) == WAIT_OBJECT_0;
     }
 
     pub fn set(self: *NamedEvent) bool {
@@ -135,6 +135,13 @@ pub const NamedEvent = struct {
         }
     }
 };
+
+fn durationToWindowsMilliseconds(timeout: std.Io.Duration) u32 {
+    const milliseconds = timeout.toMilliseconds();
+    if (milliseconds <= 0) return 0;
+    if (milliseconds > std.math.maxInt(u32)) return std.math.maxInt(u32);
+    return @intCast(milliseconds);
+}
 
 fn windowsFileMapAccess(access: Access) windows.DWORD {
     return switch (access) {

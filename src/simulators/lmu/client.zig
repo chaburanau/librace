@@ -8,6 +8,7 @@ const catalog = @import("catalog.zig");
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidData,
     OutOfMemory,
+    Timeout,
 };
 
 pub const PollStatus = enum {
@@ -83,29 +84,6 @@ pub const Client = struct {
         return client;
     }
 
-    pub fn waitForConnection(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        timeout_ms: ?u32,
-    ) ConnectError!Client {
-        const step_ms: u32 = 200;
-        var elapsed_ms: u32 = 0;
-        while (true) {
-            if (Client.connect(allocator)) |client| {
-                return client;
-            } else |err| switch (err) {
-                error.NotFound, error.InvalidData => {
-                    if (timeout_ms) |t| {
-                        if (elapsed_ms >= t) return err;
-                    }
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(step_ms), .real) catch {};
-                    elapsed_ms +|= step_ms;
-                },
-                else => return err,
-            }
-        }
-    }
-
     pub fn deinit(self: *Client) void {
         self.allocator.destroy(self.telem);
         self.allocator.destroy(self.session_info);
@@ -129,8 +107,8 @@ pub const Client = struct {
         };
     }
 
-    pub fn waitAndPoll(self: *Client, timeout_ms: u32) PollStatus {
-        if (self.data_event) |*ev| _ = ev.wait(timeout_ms);
+    pub fn waitAndPoll(self: *Client, timeout: std.Io.Duration) PollStatus {
+        if (self.data_event) |*ev| _ = ev.wait(timeout);
         return self.poll();
     }
 

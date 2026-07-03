@@ -11,6 +11,7 @@ const testing = @import("testing.zig");
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidHeader,
     OutOfMemory,
+    Timeout,
 };
 
 /// Failure modes for type-coercing scalar reads.
@@ -178,33 +179,6 @@ pub const Client = struct {
         return client;
     }
 
-    /// Retry `connect` until the simulator is available or `timeout_ms` elapses (`null` = forever).
-    ///
-    /// Useful when the consumer starts before the game. Polls roughly every 200 ms; only
-    /// `error.NotFound` / `error.InvalidHeader` are retried, other errors propagate immediately.
-    pub fn waitForConnection(
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        timeout_ms: ?u32,
-    ) ConnectError!Client {
-        const step_ms: u32 = 200;
-        var elapsed_ms: u32 = 0;
-        while (true) {
-            if (Client.connect(allocator)) |client| {
-                return client;
-            } else |err| switch (err) {
-                error.NotFound, error.InvalidHeader => {
-                    if (timeout_ms) |t| {
-                        if (elapsed_ms >= t) return err;
-                    }
-                    std.Io.sleep(io, std.Io.Duration.fromMilliseconds(step_ms), .real) catch {};
-                    elapsed_ms +|= step_ms;
-                },
-                else => return err,
-            }
-        }
-    }
-
     pub fn deinit(self: *Client) void {
         self.clearSessionCache();
         self.session_cache.deinit(self.allocator);
@@ -247,11 +221,11 @@ pub const Client = struct {
         return .ok;
     }
 
-    /// Block up to `timeout_ms` for the sim's data-valid event, then `poll`.
+    /// Block up to `timeout` for the sim's data-valid event, then `poll`.
     ///
     /// Falls back to a plain `poll` when the event is unavailable.
-    pub fn waitAndPoll(self: *Client, timeout_ms: u32) PollStatus {
-        if (self.data_valid_event) |*ev| _ = ev.wait(timeout_ms);
+    pub fn waitAndPoll(self: *Client, timeout: std.Io.Duration) PollStatus {
+        if (self.data_valid_event) |*ev| _ = ev.wait(timeout);
         return self.poll();
     }
 

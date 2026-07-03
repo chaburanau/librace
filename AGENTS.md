@@ -130,8 +130,9 @@ layer on top. The SDK bakes in no `Telemetry` or session structs — the caller 
 ```zig
 const ir = librace.simulators.iracing;
 
-var client = try ir.connect(allocator);
-// or: ir.waitForConnection(allocator, io, timeout_ms) to wait for the sim to start.
+var client = try ir.connect(allocator, io, .{});
+// or: ir.connect(allocator, io, .{ .timeout = std.Io.Duration.fromSeconds(30) })
+// to wait for the sim to start.
 defer client.deinit();
 
 while (client.poll() == .ok) {
