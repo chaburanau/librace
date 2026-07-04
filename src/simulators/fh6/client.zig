@@ -1,10 +1,9 @@
-//! Forza Horizon 6 client: binds a UDP listener and exposes typed plus generic
-//! access to the latest 324-byte Data Out packet.
+//! Forza Horizon 6 client: binds a UDP listener and exposes typed access to the latest
+//! 324-byte Data Out packet via `packet()`.
 
 const std = @import("std");
 const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
-const catalog = @import("catalog.zig");
 
 pub const ConnectError = core.transport.udp.UdpListener.OpenError || error{
     OutOfMemory,
@@ -20,19 +19,6 @@ pub const PollStatus = enum {
         return self == .ok;
     }
 };
-
-pub const FieldRaw = struct {
-    field_type: catalog.FieldType,
-    count: usize,
-    data: []const u8,
-};
-
-pub const FieldHandle = struct {
-    descriptor: catalog.FieldDescriptor,
-};
-
-pub const NameIterator = catalog.NameIterator;
-pub const FieldDescriptor = catalog.FieldDescriptor;
 
 pub const Config = struct {
     address: []const u8 = "0.0.0.0",
@@ -106,41 +92,6 @@ pub const Client = struct {
     pub fn packet(self: *const Client) *const protocol.DashPacket {
         return self.snapshot;
     }
-
-    pub fn fieldCount(self: *const Client) usize {
-        _ = self;
-        return catalog.field_count;
-    }
-
-    pub fn hasField(self: *const Client, name: []const u8) bool {
-        _ = self;
-        return catalog.find(name) != null;
-    }
-
-    pub fn fieldNameIterator(self: *const Client) NameIterator {
-        _ = self;
-        return .{};
-    }
-
-    pub fn getNumber(self: *const Client, name: []const u8) ?f64 {
-        const field = catalog.find(name) orelse return null;
-        return catalog.decodeNumber(field, std.mem.asBytes(self.snapshot));
-    }
-
-    pub fn getRaw(self: *const Client, name: []const u8) ?FieldRaw {
-        const field = catalog.find(name) orelse return null;
-        const data = catalog.rawBytes(field, std.mem.asBytes(self.snapshot)) orelse return null;
-        return .{ .field_type = field.field_type, .count = field.count, .data = data };
-    }
-
-    pub fn resolve(self: *const Client, name: []const u8) ?FieldHandle {
-        _ = self;
-        return .{ .descriptor = catalog.find(name) orelse return null };
-    }
-
-    pub fn read(self: *const Client, handle: FieldHandle) ?f64 {
-        return catalog.decodeNumber(handle.descriptor, std.mem.asBytes(self.snapshot));
-    }
 };
 
 fn monotonicMs() u64 {
@@ -152,7 +103,7 @@ fn monotonicMs() u64 {
 
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 
-test "generic access over an owned packet snapshot" {
+test "typed packet snapshot access" {
     const allocator = std.testing.allocator;
     const snapshot = try allocator.create(protocol.DashPacket);
     defer allocator.destroy(snapshot);
@@ -170,7 +121,8 @@ test "generic access over an owned packet snapshot" {
         .has_packet = true,
     };
 
-    try std.testing.expectApproxEqAbs(@as(f64, 50), client.getNumber("speed").?, 0.001);
-    try std.testing.expectEqual(@as(f64, 7200), client.getNumber("current_engine_rpm").?);
-    try std.testing.expectEqual(@as(f64, 5), client.getNumber("gear").?);
+    try std.testing.expectApproxEqAbs(@as(f32, 50), client.packet().speed, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 180), client.packet().speedKmh(), 0.001);
+    try std.testing.expectEqual(@as(f32, 7200), client.packet().current_engine_rpm);
+    try std.testing.expectEqual(@as(i32, 4), client.packet().displayGear());
 }

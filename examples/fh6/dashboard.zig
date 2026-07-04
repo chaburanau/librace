@@ -63,7 +63,7 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
 
     data.header_left = p.sessionLabel();
     data.header_right = std.fmt.bufPrint(&ctx.header_right_buf, "fields={d} ts={d} pos={d}", .{
-        c.fieldCount(),
+        fh6.field_count,
         p.timestamp_ms,
         p.race_position,
     }) catch "?";
@@ -101,7 +101,7 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
     data.session_time = p.current_race_time;
     data.session_num = @floatFromInt(p.race_position);
 
-    data.var_count = c.fieldCount();
+    data.var_count = fh6.field_count;
     data.discovery_hint = std.fmt.bufPrint(&ctx.discovery_buf, "ordinal={d} class={s} pi={d}", .{
         p.car_ordinal,
         p.carClassValue().label(),

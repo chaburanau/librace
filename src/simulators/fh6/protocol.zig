@@ -183,6 +183,8 @@ pub const DashPacket = extern struct {
     }
 };
 
+pub const field_count = @typeInfo(DashPacket).@"struct".fields.len;
+
 /// Copy `bytes` into `dest`, requiring at least [`packet_size`] bytes.
 pub fn decodePacket(bytes: []const u8, dest: *DashPacket) bool {
     if (bytes.len < packet_size) return false;

@@ -28,8 +28,8 @@ const Context = struct {
         return ctx.client.?.poll(poll_timeout).isOk();
     }
 
-    pub fn varCount(ctx: *Context) usize {
-        return ctx.client.?.fieldCount();
+    pub fn varCount(_: *Context) usize {
+        return fh6.field_count;
     }
 
     pub fn readSample(ctx: *Context, sample: *simple.Sample) void {
