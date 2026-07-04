@@ -52,19 +52,20 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
     const c = &ctx.client.?;
     const p = c.physics();
     const g = c.graphics();
+    const st = c.static();
 
     data.header_left = @tagName(c.liveStatus());
     data.header_right = std.fmt.bufPrint(&ctx.header_right_buf, "fields={d} pkt={d}", .{
-        c.fieldCount(),
+        ac.field_count,
         c.livePhysicsPacketId(),
     }) catch "?";
 
     // Session metadata — wchar strings decoded into owned buffers.
-    data.track = nonEmpty(c.getString(ac.keys.static.track, &ctx.track_buf));
-    data.car = nonEmpty(c.getString(ac.keys.static.car_model, &ctx.car_buf));
-    data.driver = formatDriver(ctx, c);
+    data.track = nonEmpty(if (st) |s| s.trackUtf8(&ctx.track_buf) else null);
+    data.car = nonEmpty(if (st) |s| s.carModelUtf8(&ctx.car_buf) else null);
+    data.driver = formatDriver(ctx, st);
     data.session_type = g.sessionValue().label();
-    data.track_length = formatTrackLength(ctx, c);
+    data.track_length = formatTrackLength(ctx, st);
     data.on_track = g.locationLabel();
 
     // Drive
@@ -97,9 +98,9 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
     data.session_time = @as(f64, g.session_time_left) / 1000.0;
     data.session_num = @floatFromInt(g.position);
 
-    data.var_count = c.fieldCount();
+    data.var_count = ac.field_count;
     data.discovery_hint = std.fmt.bufPrint(&ctx.discovery_buf, "fields={d} pages=3", .{
-        c.fieldCount(),
+        ac.field_count,
     }) catch "?";
 }
 
@@ -108,14 +109,15 @@ fn nonEmpty(value: ?[]const u8) []const u8 {
     return if (s.len > 0) s else "?";
 }
 
-fn formatDriver(ctx: *Context, c: *const ac.Client) []const u8 {
-    const first = c.getString(ac.keys.static.player_name, &ctx.name_buf) orelse "";
-    const last = c.getString(ac.keys.static.player_surname, &ctx.surname_buf) orelse "";
+fn formatDriver(ctx: *Context, st: ?*const ac.Static) []const u8 {
+    const s = st orelse return "?";
+    const first = s.playerNameUtf8(&ctx.name_buf) orelse "";
+    const last = s.playerSurnameUtf8(&ctx.surname_buf) orelse "";
     if (first.len == 0 and last.len == 0) return "?";
     return std.fmt.bufPrint(&ctx.driver_buf, "{s} {s}", .{ first, last }) catch "?";
 }
 
-fn formatTrackLength(ctx: *Context, c: *const ac.Client) []const u8 {
-    const st = c.static() orelse return "?";
-    return std.fmt.bufPrint(&ctx.track_len_buf, "{d:.0} m", .{st.track_spline_length}) catch "?";
+fn formatTrackLength(ctx: *Context, st: ?*const ac.Static) []const u8 {
+    const s = st orelse return "?";
+    return std.fmt.bufPrint(&ctx.track_len_buf, "{d:.0} m", .{s.track_spline_length}) catch "?";
 }

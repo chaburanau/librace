@@ -140,6 +140,11 @@ pub const Physics = extern struct {
     }
 };
 
+fn wstringFieldUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
+    const value = @field(self, field);
+    return wcharToUtf8(std.mem.asBytes(&value), out);
+}
+
 /// Per-frame HUD / session-progress telemetry (`Local\\acpmf_graphics`).
 pub const Graphics = extern struct {
     packet_id: i32 = 0,
@@ -191,6 +196,26 @@ pub const Graphics = extern struct {
         if (self.is_in_pit_lane != 0) return "Pit Lane";
         return "Track";
     }
+
+    pub fn currentTimeUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("current_time", self, out);
+    }
+
+    pub fn lastTimeUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("last_time", self, out);
+    }
+
+    pub fn bestTimeUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("best_time", self, out);
+    }
+
+    pub fn splitUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("split", self, out);
+    }
+
+    pub fn tyreCompoundUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("tyre_compound", self, out);
+    }
 };
 
 /// Static session/car metadata (`Local\\acpmf_static`), written once when a session loads.
@@ -237,7 +262,52 @@ pub const Static = extern struct {
     reversed_grid_positions: i32 = 0,
     pit_window_start: i32 = 0,
     pit_window_end: i32 = 0,
+
+    pub fn smVersionUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("sm_version", self, out);
+    }
+
+    pub fn acVersionUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("ac_version", self, out);
+    }
+
+    pub fn carModelUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("car_model", self, out);
+    }
+
+    pub fn trackUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("track", self, out);
+    }
+
+    pub fn playerNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_name", self, out);
+    }
+
+    pub fn playerSurnameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_surname", self, out);
+    }
+
+    pub fn playerNickUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_nick", self, out);
+    }
+
+    pub fn trackConfigurationUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("track_configuration", self, out);
+    }
+
+    pub fn carSkinUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("car_skin", self, out);
+    }
 };
+
+fn comptimeStructFieldCount(comptime T: type) usize {
+    return @typeInfo(T).@"struct".fields.len;
+}
+
+/// Total protocol fields across all three pages (for discovery-style display).
+pub const field_count = comptimeStructFieldCount(Physics) +
+    comptimeStructFieldCount(Graphics) +
+    comptimeStructFieldCount(Static);
 
 /// Decode a UTF-16LE (`wchar_t`) buffer into `out` as UTF-8, truncating at the NUL terminator.
 pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
@@ -293,6 +363,15 @@ test "wcharToUtf8 decodes a UTF-16LE name and stops at NUL" {
     const src = [_]u8{ 'M', 0, 'o', 0, 'n', 0, 'z', 0, 'a', 0, 0, 0, 'X', 0 };
     var out: [32]u8 = undefined;
     try std.testing.expectEqualStrings("Monza", wcharToUtf8(&src, &out).?);
+}
+
+test "Static wstring helpers decode UTF-16LE fields" {
+    var stat: Static = .{};
+    const car = std.unicode.utf8ToUtf16LeStringLiteral("Ferrari 458");
+    @memcpy(stat.car_model[0..car.len], car);
+
+    var out: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("Ferrari 458", stat.carModelUtf8(&out).?);
 }
 
 test "readPacketId reads the leading counter" {

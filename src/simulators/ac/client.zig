@@ -1,10 +1,9 @@
-//! Assetto Corsa client: opens the three classic AC shared-memory pages and exposes typed struct
-//! access plus generic name-based lookup over the physics/graphics/static catalog.
+//! Assetto Corsa client: opens the three classic AC shared-memory pages and exposes typed
+//! struct snapshots via `physics()`, `graphics()`, and `static()`.
 
 const std = @import("std");
 const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
-const catalog = @import("catalog.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     /// A required page mapped but is smaller than its documented struct.
@@ -26,21 +25,6 @@ pub const PollStatus = enum {
         return self == .ok;
     }
 };
-
-/// Raw little-endian bytes for a catalog field. Valid until the next `poll`.
-pub const FieldRaw = struct {
-    field_type: catalog.FieldType,
-    count: usize,
-    data: []const u8,
-};
-
-/// Stable reference to a catalog field, resolved once and read many times.
-pub const FieldHandle = struct {
-    descriptor: catalog.FieldDescriptor,
-};
-
-pub const NameIterator = catalog.NameIterator;
-pub const FieldDescriptor = catalog.FieldDescriptor;
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
@@ -157,59 +141,6 @@ pub const Client = struct {
         return if (self.has_static) self.stat else null;
     }
 
-    /// Number of named fields in the generic catalog (all pages).
-    pub fn fieldCount(self: *const Client) usize {
-        _ = self;
-        return catalog.field_count;
-    }
-
-    pub fn hasField(self: *const Client, name: []const u8) bool {
-        _ = self;
-        return catalog.find(name) != null;
-    }
-
-    pub fn fieldNameIterator(self: *const Client) NameIterator {
-        _ = self;
-        return .{};
-    }
-
-    /// Read a numeric field by protocol name as a lenient `f64`. Null when unknown or a string.
-    pub fn getNumber(self: *const Client, name: []const u8) ?f64 {
-        const field = catalog.find(name) orelse return null;
-        return catalog.decodeNumber(field, self.pageBytes(field.page));
-    }
-
-    /// Decode a `wchar_t` string field by protocol name into `out` as UTF-8.
-    pub fn getString(self: *const Client, name: []const u8, out: []u8) ?[]const u8 {
-        const field = catalog.find(name) orelse return null;
-        return catalog.decodeWString(field, self.pageBytes(field.page), out);
-    }
-
-    /// Raw little-endian bytes for a field (whole array for non-scalars).
-    pub fn getRaw(self: *const Client, name: []const u8) ?FieldRaw {
-        const field = catalog.find(name) orelse return null;
-        const data = catalog.rawBytes(field, self.pageBytes(field.page)) orelse return null;
-        return .{ .field_type = field.field_type, .count = field.count, .data = data };
-    }
-
-    /// Resolve a name into a handle for repeated reads without re-scanning the catalog.
-    pub fn resolve(self: *const Client, name: []const u8) ?FieldHandle {
-        _ = self;
-        return .{ .descriptor = catalog.find(name) orelse return null };
-    }
-
-    pub fn read(self: *const Client, handle: FieldHandle) ?f64 {
-        return catalog.decodeNumber(handle.descriptor, self.pageBytes(handle.descriptor.page));
-    }
-
-    fn pageBytes(self: *const Client, page: catalog.Page) []const u8 {
-        return switch (page) {
-            .physics => std.mem.asBytes(self.phys),
-            .graphics => std.mem.asBytes(self.gfx),
-            .static => std.mem.asBytes(self.stat),
-        };
-    }
-
     fn copyAll(self: *Client) bool {
         const ok_phys = copyPage(protocol.Physics, self.phys_mem.view, self.phys);
         const ok_gfx = copyPage(protocol.Graphics, self.gfx_mem.view, self.gfx);
@@ -258,7 +189,7 @@ test "copyPage rejects a short view" {
     try std.testing.expect(!copyPage(protocol.Physics, &tiny, &dest));
 }
 
-test "generic access over an owned snapshot" {
+test "typed snapshot access and wstring decode" {
     const allocator = std.testing.allocator;
     const phys = try allocator.create(protocol.Physics);
     defer allocator.destroy(phys);
@@ -289,19 +220,13 @@ test "generic access over an owned snapshot" {
         .stat = stat,
     };
 
-    try std.testing.expectApproxEqAbs(@as(f64, 211.0), client.getNumber("speed_kmh").?, 0.001);
-    try std.testing.expectEqual(@as(f64, 5), client.getNumber("gear").?);
-    try std.testing.expectApproxEqAbs(@as(f64, 4.5), client.getNumber("wind_speed").?, 0.001);
-    try std.testing.expect(client.getNumber("does_not_exist") == null);
+    try std.testing.expectApproxEqAbs(@as(f32, 211.0), client.physics().speed_kmh, 0.001);
+    try std.testing.expectEqual(@as(i32, 5), client.physics().gear);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.5), client.graphics().wind_speed, 0.001);
 
     var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Ferrari 458", client.getString("car_model", &buf).?);
-    try std.testing.expectEqualStrings("Monza", client.getString("track", &buf).?);
-    try std.testing.expect(client.getString("speed_kmh", &buf) == null);
-    try std.testing.expect(client.getNumber("car_model") == null);
-
-    const h = client.resolve("rpms").?;
-    try std.testing.expectEqual(@as(f64, 0), client.read(h).?);
+    try std.testing.expectEqualStrings("Ferrari 458", client.static().?.carModelUtf8(&buf).?);
+    try std.testing.expectEqualStrings("Monza", client.static().?.trackUtf8(&buf).?);
 }
 
 test "connect handles available or missing shared memory" {
