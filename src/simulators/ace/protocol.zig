@@ -16,6 +16,8 @@
 //!   update and is used to detect new data and torn reads.
 
 const std = @import("std");
+const strings = @import("../../core/utils/strings.zig");
+const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Windows named shared-memory tags. The `Local\\` prefix selects the per-session namespace.
 pub const physics_map_name = "Local\\acevo_pmf_physics";
@@ -490,15 +492,15 @@ pub const Graphics = extern struct {
     }
 
     pub fn carModel(self: *const Graphics) []const u8 {
-        return cString(&self.car_model);
+        return strings.cString(&self.car_model);
     }
 
     pub fn driverName(self: *const Graphics) []const u8 {
-        return cString(&self.driver_name);
+        return strings.cString(&self.driver_name);
     }
 
     pub fn driverSurname(self: *const Graphics) []const u8 {
-        return cString(&self.driver_surname);
+        return strings.cString(&self.driver_surname);
     }
 };
 
@@ -533,26 +535,15 @@ pub const Static = extern struct {
     }
 
     pub fn trackName(self: *const Static) []const u8 {
-        return cString(&self.track);
+        return strings.cString(&self.track);
     }
 
     pub fn trackConfiguration(self: *const Static) []const u8 {
-        return cString(&self.track_configuration);
+        return strings.cString(&self.track_configuration);
     }
 };
 
-fn comptimeStructFieldCount(comptime T: type) usize {
-    return @typeInfo(T).@"struct".fields.len;
-}
-
-pub const field_count = comptimeStructFieldCount(Physics) +
-    comptimeStructFieldCount(Graphics) +
-    comptimeStructFieldCount(Static);
-
-/// Trim a fixed-size C char buffer to its NUL-terminated string slice.
-pub fn cString(buf: []const u8) []const u8 {
-    return std.mem.sliceTo(buf, 0);
-}
+pub const field_count = comptime_util.sumStructFieldCounts(&.{ Physics, Graphics, Static });
 
 /// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
 pub fn readPacketId(view: []const u8) ?i32 {
@@ -589,9 +580,4 @@ test "static page string and scalar offsets" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Static, "sm_version"));
     try std.testing.expectEqual(@as(usize, 32), @offsetOf(Static, "session"));
     try std.testing.expectEqual(@as(usize, 208), @sizeOf(Static));
-}
-
-test "cString trims at the NUL terminator" {
-    const buf = [_]u8{ 'S', 'p', 'a', 0, 'x', 0 };
-    try std.testing.expectEqualStrings("Spa", cString(&buf));
 }

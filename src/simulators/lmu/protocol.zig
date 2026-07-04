@@ -10,6 +10,8 @@
 //! - Strings are fixed-size ANSI `char` buffers, not UTF-16.
 
 const std = @import("std");
+const strings = @import("../../core/utils/strings.zig");
+const comptime_util = @import("../../core/utils/comptime.zig");
 
 pub const mem_map_name = "LMU_Data";
 pub const data_event_name = "LMU_Data_Event";
@@ -326,11 +328,11 @@ pub const TelemInfoV01 = extern struct {
     }
 
     pub fn vehicleNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.vehicle_name, out);
+        return strings.cstrToUtf8(&self.vehicle_name, out);
     }
 
     pub fn trackNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.track_name, out);
+        return strings.cstrToUtf8(&self.track_name, out);
     }
 };
 
@@ -398,11 +400,11 @@ pub const VehicleScoringInfoV01 = extern struct {
     }
 
     pub fn driverNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.driver_name, out);
+        return strings.cstrToUtf8(&self.driver_name, out);
     }
 
     pub fn vehicleNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.vehicle_name, out);
+        return strings.cstrToUtf8(&self.vehicle_name, out);
     }
 };
 
@@ -457,11 +459,11 @@ pub const ScoringInfoV01 = extern struct {
     }
 
     pub fn trackNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.track_name, out);
+        return strings.cstrToUtf8(&self.track_name, out);
     }
 
     pub fn playerNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
-        return cstrToUtf8(&self.player_name, out);
+        return strings.cstrToUtf8(&self.player_name, out);
     }
 };
 
@@ -523,26 +525,7 @@ pub const scoring_offset = @offsetOf(SharedMemoryObjectOut, "scoring");
 pub const scoring_info_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "scoring_info");
 pub const vehicle_scoring_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "veh_scoring_info");
 
-fn comptimeStructFieldCount(comptime T: type) usize {
-    return @typeInfo(T).@"struct".fields.len;
-}
-
-pub const field_count = comptimeStructFieldCount(TelemInfoV01) +
-    comptimeStructFieldCount(ScoringInfoV01) +
-    comptimeStructFieldCount(VehicleScoringInfoV01);
-
-pub fn cstr(buf: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
-    return buf[0..end];
-}
-
-pub fn cstrToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
-    const s = cstr(src_bytes);
-    if (!std.unicode.utf8ValidateSlice(s)) return null;
-    const len = @min(s.len, out.len);
-    @memcpy(out[0..len], s[0..len]);
-    return out[0..len];
-}
+pub const field_count = comptime_util.sumStructFieldCounts(&.{ TelemInfoV01, ScoringInfoV01, VehicleScoringInfoV01 });
 
 pub fn readActiveVehicles(view: []const u8) ?u8 {
     const offset = telemetry_offset + @offsetOf(SharedMemoryTelemetryData, "active_vehicles");
@@ -601,11 +584,4 @@ test "native LMU layout matches shipped C++ headers" {
     try std.testing.expectEqual(@as(usize, 1632), scoring_offset);
     try std.testing.expectEqual(@as(usize, 1632), scoring_info_offset);
     try std.testing.expectEqual(@as(usize, 2192), vehicle_scoring_offset);
-}
-
-test "cstr helpers stop at NUL and validate UTF-8" {
-    const src = [_]u8{ 'S', 'p', 'a', 0, 'X' };
-    try std.testing.expectEqualStrings("Spa", cstr(&src));
-    var out: [16]u8 = undefined;
-    try std.testing.expectEqualStrings("Spa", cstrToUtf8(&src, &out).?);
 }

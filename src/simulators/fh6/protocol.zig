@@ -9,6 +9,7 @@
 //! - Speed is meters per second; inputs are 0–255 except steer/driving-line fields (S8).
 
 const std = @import("std");
+const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Default listener port. Must match FH6 Settings → HUD and Gameplay → Data Out IP Port.
 /// Avoid 5200–5300 (the game binds its outgoing socket in that range).
@@ -183,7 +184,7 @@ pub const DashPacket = extern struct {
     }
 };
 
-pub const field_count = @typeInfo(DashPacket).@"struct".fields.len;
+pub const field_count = comptime_util.structFieldCount(DashPacket);
 
 /// Copy `bytes` into `dest`, requiring at least [`packet_size`] bytes.
 pub fn decodePacket(bytes: []const u8, dest: *DashPacket) bool {

@@ -13,6 +13,8 @@
 //!   current ACC builds write an `int32` there; reading it as float produces a denormal.
 
 const std = @import("std");
+const strings = @import("../../core/utils/strings.zig");
+const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Windows named shared-memory tags. ACC intentionally uses the same tags as classic AC.
 pub const physics_map_name = "Local\\acpmf_physics";
@@ -234,11 +236,6 @@ pub const Physics = extern struct {
     }
 };
 
-fn wstringFieldUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
-    const value = @field(self, field);
-    return wcharToUtf8(std.mem.asBytes(&value), out);
-}
-
 /// Session/HUD telemetry, updated once per rendered frame (`Local\\acpmf_graphics`).
 pub const Graphics = extern struct {
     packet_id: i32 = 0,
@@ -360,11 +357,11 @@ pub const Graphics = extern struct {
     }
 
     pub fn tyreCompoundUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("tyre_compound", self, out);
+        return strings.wstringFieldUtf8("tyre_compound", self, out);
     }
 
     pub fn trackStatusUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("track_status", self, out);
+        return strings.wstringFieldUtf8("track_status", self, out);
     }
 };
 
@@ -417,51 +414,31 @@ pub const Static = extern struct {
     wet_tyres_name: [33]u16 = @splat(0),
 
     pub fn carModelUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("car_model", self, out);
+        return strings.wstringFieldUtf8("car_model", self, out);
     }
 
     pub fn trackUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("track", self, out);
+        return strings.wstringFieldUtf8("track", self, out);
     }
 
     pub fn playerNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("player_name", self, out);
+        return strings.wstringFieldUtf8("player_name", self, out);
     }
 
     pub fn playerSurnameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("player_surname", self, out);
+        return strings.wstringFieldUtf8("player_surname", self, out);
     }
 
     pub fn dryTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("dry_tyres_name", self, out);
+        return strings.wstringFieldUtf8("dry_tyres_name", self, out);
     }
 
     pub fn wetTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return wstringFieldUtf8("wet_tyres_name", self, out);
+        return strings.wstringFieldUtf8("wet_tyres_name", self, out);
     }
 };
 
-fn comptimeStructFieldCount(comptime T: type) usize {
-    return @typeInfo(T).@"struct".fields.len;
-}
-
-pub const field_count = comptimeStructFieldCount(Physics) +
-    comptimeStructFieldCount(Graphics) +
-    comptimeStructFieldCount(Static);
-
-/// Decode a UTF-16LE (`wchar_t`) buffer into `out` as UTF-8, truncating at NUL.
-pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
-    var units: [256]u16 = undefined;
-    const max_units = @min(src_bytes.len / 2, units.len);
-    var len: usize = 0;
-    while (len < max_units) : (len += 1) {
-        const cu = std.mem.readInt(u16, src_bytes[len * 2 ..][0..2], .little);
-        if (cu == 0) break;
-        units[len] = cu;
-    }
-    const written = std.unicode.utf16LeToUtf8(out, units[0..len]) catch return null;
-    return out[0..written];
-}
+pub const field_count = comptime_util.sumStructFieldCounts(&.{ Physics, Graphics, Static });
 
 /// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
 pub fn readPacketId(view: []const u8) ?i32 {
@@ -499,12 +476,6 @@ test "static layout includes ACC tyre-name additions" {
     try std.testing.expectEqual(@as(usize, 684), @offsetOf(Static, "is_online"));
     try std.testing.expectEqual(@as(usize, 688), @offsetOf(Static, "dry_tyres_name"));
     try std.testing.expectEqual(@as(usize, 820), @sizeOf(Static));
-}
-
-test "wcharToUtf8 decodes a UTF-16LE value and stops at NUL" {
-    const src = [_]u8{ 'S', 0, 'p', 0, 'a', 0, 0, 0, 'X', 0 };
-    var out: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("Spa", wcharToUtf8(&src, &out).?);
 }
 
 test "readPacketId reads the leading counter" {
