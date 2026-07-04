@@ -324,6 +324,14 @@ pub const TelemInfoV01 = extern struct {
         const v = self.local_vel;
         return @sqrt(v.x * v.x + v.y * v.y + v.z * v.z) * 3.6;
     }
+
+    pub fn vehicleNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.vehicle_name, out);
+    }
+
+    pub fn trackNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.track_name, out);
+    }
 };
 
 pub const VehicleScoringInfoV01 = extern struct {
@@ -388,6 +396,14 @@ pub const VehicleScoringInfoV01 = extern struct {
     pub fn pitStateValue(self: *const VehicleScoringInfoV01) PitState {
         return self.pit_state;
     }
+
+    pub fn driverNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.driver_name, out);
+    }
+
+    pub fn vehicleNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.vehicle_name, out);
+    }
 };
 
 pub const ScoringInfoV01 = extern struct {
@@ -438,6 +454,14 @@ pub const ScoringInfoV01 = extern struct {
 
     pub fn gamePhaseValue(self: *const ScoringInfoV01) GamePhase {
         return self.game_phase;
+    }
+
+    pub fn trackNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.track_name, out);
+    }
+
+    pub fn playerNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
+        return cstrToUtf8(&self.player_name, out);
     }
 };
 
@@ -498,6 +522,14 @@ pub const telemetry_info_offset = telemetry_offset + @offsetOf(SharedMemoryTelem
 pub const scoring_offset = @offsetOf(SharedMemoryObjectOut, "scoring");
 pub const scoring_info_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "scoring_info");
 pub const vehicle_scoring_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "veh_scoring_info");
+
+fn comptimeStructFieldCount(comptime T: type) usize {
+    return @typeInfo(T).@"struct".fields.len;
+}
+
+pub const field_count = comptimeStructFieldCount(TelemInfoV01) +
+    comptimeStructFieldCount(ScoringInfoV01) +
+    comptimeStructFieldCount(VehicleScoringInfoV01);
 
 pub fn cstr(buf: []const u8) []const u8 {
     const end = std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;

@@ -55,7 +55,7 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
 
     data.header_left = s.gamePhaseValue().label();
     data.header_right = std.fmt.bufPrint(&ctx.header_right_buf, "fields={d} cars={d} tc={d}/{d} abs={d}/{d}", .{
-        c.fieldCount(),
+        lmu.field_count,
         s.num_vehicles,
         t.tc,
         t.tc_max,
@@ -63,9 +63,9 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
         t.abs_max,
     }) catch "?";
 
-    data.track = nonEmpty(c.getString(lmu.keys.session.track_name, &ctx.track_buf));
-    data.car = nonEmpty(c.getString(lmu.keys.telem.vehicle_name, &ctx.car_buf));
-    data.driver = nonEmpty(c.getString(lmu.keys.vehicle.driver_name, &ctx.driver_buf));
+    data.track = nonEmpty(s.trackNameUtf8(&ctx.track_buf));
+    data.car = nonEmpty(t.vehicleNameUtf8(&ctx.car_buf));
+    data.driver = nonEmpty(v.driverNameUtf8(&ctx.driver_buf));
     data.session_type = s.sessionValue().label();
     data.track_length = formatTrackLength(ctx, s);
     data.on_track = v.pitStateValue().label();
@@ -97,9 +97,9 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
     data.session_time = s.current_et;
     data.session_num = @floatFromInt(v.place);
 
-    data.var_count = c.fieldCount();
+    data.var_count = lmu.field_count;
     data.discovery_hint = std.fmt.bufPrint(&ctx.discovery_buf, "fields={d} phase={s} grip={d} rain={d:.2}", .{
-        c.fieldCount(),
+        lmu.field_count,
         s.gamePhaseValue().label(),
         s.track_grip_level,
         s.raining,

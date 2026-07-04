@@ -27,16 +27,16 @@ const Context = struct {
         return ctx.client.?.poll().isOk();
     }
 
-    pub fn varCount(ctx: *Context) usize {
-        return ctx.client.?.fieldCount();
+    pub fn varCount(_: *Context) usize {
+        return lmu.field_count;
     }
 
     pub fn readSample(ctx: *Context, sample: *simple.Sample) void {
         const c = &ctx.client.?;
         const t = c.telemetry();
 
-        sample.track = nonEmpty(c.getString(lmu.keys.session.track_name, &ctx.track_buf));
-        sample.car = nonEmpty(c.getString(lmu.keys.telem.vehicle_name, &ctx.car_buf));
+        sample.track = nonEmpty(c.session().trackNameUtf8(&ctx.track_buf));
+        sample.car = nonEmpty(t.vehicleNameUtf8(&ctx.car_buf));
         sample.gear = t.gear;
         sample.speed_kmh = @floatCast(t.speedKmh());
         sample.rpm = @floatCast(t.engine_rpm);

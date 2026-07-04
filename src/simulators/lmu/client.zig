@@ -3,7 +3,6 @@
 const std = @import("std");
 const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
-const catalog = @import("catalog.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidData,
@@ -20,19 +19,6 @@ pub const PollStatus = enum {
         return self == .ok;
     }
 };
-
-pub const FieldRaw = struct {
-    field_type: catalog.FieldType,
-    count: usize,
-    data: []const u8,
-};
-
-pub const FieldHandle = struct {
-    descriptor: catalog.FieldDescriptor,
-};
-
-pub const NameIterator = catalog.NameIterator;
-pub const FieldDescriptor = catalog.FieldDescriptor;
 
 const SnapshotResult = enum { ok, disconnected, stale };
 
@@ -122,54 +108,6 @@ pub const Client = struct {
 
     pub fn vehicle(self: *const Client) *const protocol.VehicleScoringInfoV01 {
         return self.vehicle_info;
-    }
-
-    pub fn fieldCount(self: *const Client) usize {
-        _ = self;
-        return catalog.field_count;
-    }
-
-    pub fn hasField(self: *const Client, name: []const u8) bool {
-        _ = self;
-        return catalog.find(name) != null;
-    }
-
-    pub fn fieldNameIterator(self: *const Client) NameIterator {
-        _ = self;
-        return .{};
-    }
-
-    pub fn getNumber(self: *const Client, name: []const u8) ?f64 {
-        const field = catalog.find(name) orelse return null;
-        return catalog.decodeNumber(field, self.pageBytes(field.page));
-    }
-
-    pub fn getString(self: *const Client, name: []const u8, out: []u8) ?[]const u8 {
-        const field = catalog.find(name) orelse return null;
-        return catalog.decodeString(field, self.pageBytes(field.page), out);
-    }
-
-    pub fn getRaw(self: *const Client, name: []const u8) ?FieldRaw {
-        const field = catalog.find(name) orelse return null;
-        const data = catalog.rawBytes(field, self.pageBytes(field.page)) orelse return null;
-        return .{ .field_type = field.field_type, .count = field.count, .data = data };
-    }
-
-    pub fn resolve(self: *const Client, name: []const u8) ?FieldHandle {
-        _ = self;
-        return .{ .descriptor = catalog.find(name) orelse return null };
-    }
-
-    pub fn read(self: *const Client, handle: FieldHandle) ?f64 {
-        return catalog.decodeNumber(handle.descriptor, self.pageBytes(handle.descriptor.page));
-    }
-
-    fn pageBytes(self: *const Client, page: catalog.Page) []const u8 {
-        return switch (page) {
-            .telem => std.mem.asBytes(self.telem),
-            .session => std.mem.asBytes(self.session_info),
-            .vehicle => std.mem.asBytes(self.vehicle_info),
-        };
     }
 
     fn copySnapshot(self: *Client) SnapshotResult {
@@ -284,7 +222,7 @@ const SharedMemoryLock = struct {
     }
 };
 
-test "generic access over fixture snapshots" {
+test "typed snapshot access and string decode" {
     const allocator = std.testing.allocator;
     const telem = try allocator.create(protocol.TelemInfoV01);
     defer allocator.destroy(telem);
@@ -298,7 +236,6 @@ test "generic access over fixture snapshots" {
     vehicle.* = .{};
     telem.engine_rpm = 8025.0;
     telem.gear = 5;
-    telem.local_vel.z = -80.0;
     @memcpy(telem.vehicle_name[0.."Ferrari 499P".len], "Ferrari 499P");
     @memcpy(session.track_name[0.."Le Mans".len], "Le Mans");
     vehicle.best_lap_time = 210.5;
@@ -311,16 +248,13 @@ test "generic access over fixture snapshots" {
         .vehicle_info = vehicle,
     };
 
-    try std.testing.expectApproxEqAbs(@as(f64, 8025.0), client.getNumber("engine_rpm").?, 0.001);
-    try std.testing.expectEqual(@as(f64, 5), client.getNumber("gear").?);
-    try std.testing.expectApproxEqAbs(@as(f64, 210.5), client.getNumber("best_lap_time").?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 8025.0), client.telemetry().engine_rpm, 0.001);
+    try std.testing.expectEqual(@as(i32, 5), client.telemetry().gear);
+    try std.testing.expectApproxEqAbs(@as(f64, 210.5), client.vehicle().best_lap_time, 0.001);
 
     var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Ferrari 499P", client.getString("vehicle_name", &out).?);
-    try std.testing.expectEqualStrings("Le Mans", client.getString("track_name", &out).?);
-
-    const h = client.resolve("engine_rpm").?;
-    try std.testing.expectApproxEqAbs(@as(f64, 8025.0), client.read(h).?, 0.001);
+    try std.testing.expectEqualStrings("Ferrari 499P", client.telemetry().vehicleNameUtf8(&out).?);
+    try std.testing.expectEqualStrings("Le Mans", client.session().trackNameUtf8(&out).?);
 }
 
 test "connect handles available or missing LMU shared memory" {
