@@ -234,6 +234,11 @@ pub const Physics = extern struct {
     }
 };
 
+fn wstringFieldUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
+    const value = @field(self, field);
+    return wcharToUtf8(std.mem.asBytes(&value), out);
+}
+
 /// Session/HUD telemetry, updated once per rendered frame (`Local\\acpmf_graphics`).
 pub const Graphics = extern struct {
     packet_id: i32 = 0,
@@ -353,6 +358,14 @@ pub const Graphics = extern struct {
         if (self.is_in_pit_lane != 0) return "Pit Lane";
         return "Track";
     }
+
+    pub fn tyreCompoundUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("tyre_compound", self, out);
+    }
+
+    pub fn trackStatusUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("track_status", self, out);
+    }
 };
 
 /// Static session/car metadata (`Local\\acpmf_static`), written on session load.
@@ -402,7 +415,39 @@ pub const Static = extern struct {
     is_online: i32 = 0,
     dry_tyres_name: [33]u16 = @splat(0),
     wet_tyres_name: [33]u16 = @splat(0),
+
+    pub fn carModelUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("car_model", self, out);
+    }
+
+    pub fn trackUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("track", self, out);
+    }
+
+    pub fn playerNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_name", self, out);
+    }
+
+    pub fn playerSurnameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_surname", self, out);
+    }
+
+    pub fn dryTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("dry_tyres_name", self, out);
+    }
+
+    pub fn wetTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("wet_tyres_name", self, out);
+    }
 };
+
+fn comptimeStructFieldCount(comptime T: type) usize {
+    return @typeInfo(T).@"struct".fields.len;
+}
+
+pub const field_count = comptimeStructFieldCount(Physics) +
+    comptimeStructFieldCount(Graphics) +
+    comptimeStructFieldCount(Static);
 
 /// Decode a UTF-16LE (`wchar_t`) buffer into `out` as UTF-8, truncating at NUL.
 pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {

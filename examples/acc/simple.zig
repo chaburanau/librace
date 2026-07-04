@@ -27,16 +27,17 @@ const Context = struct {
         return ctx.client.?.poll().isOk();
     }
 
-    pub fn varCount(ctx: *Context) usize {
-        return ctx.client.?.fieldCount();
+    pub fn varCount(_: *Context) usize {
+        return acc.field_count;
     }
 
     pub fn readSample(ctx: *Context, sample: *simple.Sample) void {
         const c = &ctx.client.?;
         const p = c.physics();
+        const st = c.static();
 
-        sample.track = nonEmpty(c.getString(acc.keys.static.track, &ctx.track_buf));
-        sample.car = nonEmpty(c.getString(acc.keys.static.car_model, &ctx.car_buf));
+        sample.track = nonEmpty(if (st) |s| s.trackUtf8(&ctx.track_buf) else null);
+        sample.car = nonEmpty(if (st) |s| s.carModelUtf8(&ctx.car_buf) else null);
         sample.gear = p.gear;
         sample.speed_kmh = p.speed_kmh;
         sample.rpm = @floatFromInt(p.rpm);
