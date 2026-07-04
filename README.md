@@ -2,7 +2,16 @@
 
 SDK for receiving real-time telemetry from racing simulators.
 
-librace is a Zig library that connects to racing games and simulators through whatever channel each title exposes — shared memory, UDP, or other protocols — and gives you a consistent way to read live data (speed, lap times, inputs, session state, and more).
+librace is a Zig library that connects to racing games and simulators through whatever channel each title exposes — shared memory, UDP, or other protocols — and exposes live data through each title's native layout.
+
+### Two API shapes
+
+| Shape | Simulators | How you read data |
+|-------|------------|-------------------|
+| **Dynamic catalog** | iRacing | Runtime variable catalog + session YAML; lookup by name/path (`getNumber`, `sessionGet`, optional `keys.zig`) |
+| **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6 | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()`, etc.); string helpers on `protocol` structs |
+
+The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from the protocol layout or IRSDK catalog.
 
 ## Supported simulators
 
@@ -14,13 +23,14 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | **Implemented** |
+| Forza Horizon 6 (FH6) | `librace.simulators.fh6` | UDP | **Implemented** |
 
 More titles will be added over time.
 
 ## Requirements
 
 - Zig 0.16.0 or newer
-- Windows (for named shared-memory telemetry today)
+- Windows (shared-memory simulators today; FH6 UDP listener also targets Windows workflows)
 
 ## Project layout
 
@@ -32,10 +42,8 @@ librace/
 │   └── simulators/           # One folder per simulator
 ├── examples/
 │   ├── common/               # Shared simple + dashboard runners
-│   ├── dashboard/            # Single dashboard binary + per-sim providers
-│   ├── iracing/
-│   │   └── simple.zig        # Smoke test (machine-readable output)
-│   └── <name>/               # simple.zig for each simulator
+│   ├── dashboard/            # Legacy dashboard entry (build.zig wires per-sim providers)
+│   └── <name>/               # simple.zig + dashboard.zig per simulator
 ├── build.zig
 └── build.zig.zon
 ```
@@ -57,17 +65,22 @@ zig build dashboard -Dsim=iracing
 zig build dashboard -Dsim=ac
 zig build dashboard -Dsim=acc
 zig build dashboard -Dsim=ace
+zig build dashboard -Dsim=acr
 zig build dashboard -Dsim=lmu
+zig build dashboard -Dsim=fh6
+
+# Or use the per-sim run step directly:
+zig build run-dashboard-ac
 ```
 
 ### Example types
 
-Each simulator has a **simple** example; the **dashboard** is one shared program with per-sim **providers** under `examples/dashboard/providers/`.
+Each simulator has a **simple** example and a **dashboard** provider under `examples/<name>/dashboard.zig`, built as `dashboard-<name>`.
 
 | Type | Binary | Build step | Purpose |
 |------|--------|------------|---------|
 | **Simple** | `zig-out/bin/<name>` | `zig build run-<name>` | Connect, poll a few samples, print one machine-readable line (`OK …` / `FAIL …`); exits 0 on success, 1 on failure |
-| **Dashboard** | `zig-out/bin/dashboard` | `zig build dashboard -Dsim=<name>` | Full-screen terminal UI driven by a common `Data` snapshot filled by the selected provider |
+| **Dashboard** | `zig-out/bin/dashboard-<name>` | `zig build run-dashboard-<name>` | Full-screen terminal UI driven by a common `Data` snapshot filled by the selected provider |
 
 Simple example output (iRacing, when connected):
 
@@ -87,12 +100,15 @@ Stub simulators print `FAIL not_implemented short_name=<name>` and exit with cod
 | ACE | `run-ace` |
 | ACR | `run-acr` |
 | LMU | `run-lmu` |
+| FH6 | `run-fh6` |
 
-Dashboard: `zig build dashboard -Dsim=<name>` for any short name above.
+Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name>`).
 
 ## Using the library
 
-Add librace as a dependency in your `build.zig.zon`, then import the module in your project:
+Add librace as a dependency in your `build.zig.zon`, then import the module in your project.
+
+### iRacing (dynamic catalog)
 
 ```zig
 const librace = @import("librace");
@@ -116,7 +132,7 @@ while (client.poll() == .ok) {
 }
 ```
 
-For hot loops, resolve a [`VarHandle`] once and read many times, or bind a typed struct whose
+For hot loops, resolve a `VarHandle` once and read many times, or bind a typed struct whose
 field names match IRSDK variable names:
 
 ```zig
@@ -133,7 +149,7 @@ while (client.poll() == .ok) {
 ### Assetto Corsa Evo
 
 AC Evo exposes three fixed shared-memory pages (`physics`, `graphics`, `static`). The client
-gives typed struct access alongside generic name-based lookup and discovery:
+exposes typed struct snapshots:
 
 ```zig
 const ace = librace.simulators.ace;
@@ -142,17 +158,15 @@ var client = try ace.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
-    // Typed struct access — the most direct route for AC Evo's fixed layout.
     const p = client.physics();
+    const g = client.graphics();
+    const st = client.static() orelse continue;
+
     const speed_kmh = p.speed_kmh;
     const rpm = p.rpms;
-
-    // Generic name-based access over the comptime field catalog.
-    const fuel = client.getNumber(ace.keys.physics.fuel) orelse 0;
-
-    // Session metadata (static + graphics pages).
-    const track = client.trackName();
-    const car = client.carModel();
+    const fuel = p.fuel;
+    const track = st.trackName();
+    const car = g.carModel();
     _ = .{ speed_kmh, rpm, fuel, track, car };
 }
 ```
@@ -170,13 +184,14 @@ defer client.deinit();
 
 while (client.poll() == .ok) {
     const p = client.physics();
+    const st = client.static().?;
+
     const speed_kmh = p.speed_kmh;
     const rpm = p.rpms;
-
-    const fuel = client.getNumber(ac.keys.physics.fuel) orelse 0;
+    const fuel = p.fuel;
 
     var buf: [96]u8 = undefined;
-    const car = client.getString(ac.keys.static.car_model, &buf) orelse "?";
+    const car = st.carModelUtf8(&buf) orelse "?";
     _ = .{ speed_kmh, rpm, fuel, car };
 }
 ```
@@ -196,23 +211,23 @@ defer client.deinit();
 while (client.poll() == .ok) {
     const p = client.physics();
     const g = client.graphics();
+    const st = client.static() orelse continue;
 
     const speed_kmh = p.speed_kmh;
     const rpm = p.rpm;
     const rain = g.rainIntensityValue().label();
 
     var buf: [96]u8 = undefined;
-    const track = client.getString(acc.keys.static.track, &buf) orelse "?";
+    const track = st.trackUtf8(&buf) orelse "?";
     _ = .{ speed_kmh, rpm, rain, track };
 }
 ```
 
 ### Assetto Corsa Rally
 
-AC Rally reuses the classic Assetto Corsa shared-memory layout (`Local\acpmf_physics` /
-`acpmf_graphics` / `acpmf_static`) with `wchar_t` (UTF-16LE) strings. The client mirrors the
-AC Evo shape — typed struct access plus a generic name-based catalog — but string lookups take a
-caller buffer because the values are UTF-16:
+AC Rally reuses the classic Assetto Corsa shared-memory layout with `wchar_t` (UTF-16LE) strings.
+The client exposes typed struct snapshots; `isConnected` keys off the physics `packetId` because
+the graphics page is mostly unpopulated by the title:
 
 ```zig
 const acr = librace.simulators.acr;
@@ -221,17 +236,15 @@ var client = try acr.connect(allocator, io, .{});
 defer client.deinit();
 
 while (client.poll() == .ok) {
-    // Typed struct access over the fixed physics page.
     const p = client.physics();
+    const st = client.static() orelse continue;
+
     const speed_kmh = p.speed_kmh;
     const rpm = p.rpms;
+    const fuel = p.fuel;
 
-    // Generic name-based access over the comptime field catalog.
-    const fuel = client.getNumber(acr.keys.physics.fuel) orelse 0;
-
-    // wchar_t strings decode into a caller-supplied UTF-8 buffer.
     var buf: [96]u8 = undefined;
-    const car = client.getString(acr.keys.static.car_model, &buf) orelse "?";
+    const car = st.carModelUtf8(&buf) orelse "?";
     _ = .{ speed_kmh, rpm, fuel, car };
 }
 ```
@@ -261,10 +274,35 @@ while (client.poll() == .ok) {
     const tc = t.tc;
 
     var buf: [96]u8 = undefined;
-    const track = client.getString(lmu.keys.session.track_name, &buf) orelse "?";
+    const track = s.trackNameUtf8(&buf) orelse "?";
     _ = .{ speed_kmh, rpm, tc, s.current_et, track };
 }
 ```
+
+### Forza Horizon 6
+
+FH6 broadcasts a fixed 324-byte UDP datagram while driving. Enable **Settings → HUD and Gameplay → Data Out** (default port `20066`).
+
+```zig
+const fh6 = librace.simulators.fh6;
+
+var client = try fh6.connect(allocator, io, .{});
+defer client.deinit();
+
+const poll_timeout = std.Io.Duration.fromMilliseconds(500);
+while (client.poll(poll_timeout) == .ok) {
+    const p = client.packet();
+
+    var buf: [64]u8 = undefined;
+    const speed_kmh = p.speedKmh();
+    const rpm = p.current_engine_rpm;
+    const gear = p.displayGear();
+    const car = p.formatCarSummary(&buf);
+    _ = .{ speed_kmh, rpm, gear, car };
+}
+```
+
+Fixed-struct simulators also export `field_count` (comptime protocol field total) for discovery-style display in examples.
 
 See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 

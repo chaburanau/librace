@@ -8,6 +8,15 @@ librace is a **Zig SDK** for **real-time racing simulator telemetry**. Consumers
 
 Each simulator uses different transports and data layouts. This library abstracts those differences behind per-title modules while sharing common infrastructure in `src/core/`.
 
+### Two API shapes
+
+| Shape | Simulators | Primary access |
+|-------|------------|----------------|
+| **Dynamic catalog** | iRacing | Runtime variable catalog + session YAML; `getNumber`, `sessionGet`, `keys.zig` |
+| **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6 | Typed snapshots (`physics()`, `telemetry()`, `packet()`, …); string helpers on `protocol` structs |
+
+Do not add a shared `Telemetry { speed, gear, … }` struct to the SDK — callers read what they need from the native layout or IRSDK catalog.
+
 ## Repository layout
 
 ```
@@ -22,24 +31,22 @@ src/
     root.zig               # Re-exports all simulator modules
     <short-name>/
       root.zig             # Public API for that title
-      protocol.zig         # (optional) wire format structs/constants
-      client.zig           # (optional) connect / poll / parse logic
+      protocol.zig         # Wire format structs/constants
+      client.zig           # Connect / poll / parse logic
       session.zig          # (optional) semi-static session metadata parsing
-      keys.zig             # (optional) commonly used path/name constants
+      catalog.zig          # (iRacing only) runtime variable catalog
+      keys.zig             # (iRacing only) commonly used path/name constants
 
 examples/
   common/
     root.zig               # Re-exports simple, dashboard, stub helpers
     simple.zig             # Smoke-test runner (OK/FAIL output, comptime hooks)
     dashboard.zig          # Terminal dashboard runner (common Data + render)
+    dashboard_main.zig     # Shared dashboard executable entry (imports per-sim provider)
     stub.zig               # not_implemented hooks for unimplemented simulators
-  dashboard/
-    main.zig               # Single dashboard executable entry point
-    providers/
-      iracing.zig          # iRacing Data provider
-      stub.zig             # Placeholder provider (build-time sim name)
   <short-name>/
     simple.zig             # Minimal connect + poll example (comptime hooks)
+    dashboard.zig          # Dashboard provider (connect/poll/fillData hooks)
 
 build.zig                  # Library module + simple per sim + unified dashboard + tests
 build.zig.zon
@@ -63,8 +70,8 @@ When adding a new title, use a short lowercase folder name and add it to `src/si
 
 Simulators expose telemetry through one or more channels:
 
-- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts, LMU native (`LMU_Data`), rF2-family plugin buffers.
-- **UDP** — ACC and others broadcast structured packets on configurable ports.
+- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts (`acpmf_*`), LMU native (`LMU_Data`), rF2-family plugin buffers.
+- **UDP** — FH6 Data Out (324-byte dash packet on a configurable port; default `20066`).
 - **Hybrid** — some titles use both; implement whichever channel is needed for complete data.
 - **Custom** — reserve `TransportKind.custom` for WebSocket, TCP, or proprietary APIs.
 
@@ -77,10 +84,10 @@ Do not put simulator-specific struct layouts in `core/`.
 When implementing any simulator module:
 
 1. **Do not assume** what callers need — avoid opinionated structs that pre-parse a fixed field set (no `Telemetry { speed, gear, … }` in the SDK).
-2. **Provide generic access** — lookup live data by key/name; lookup session metadata by path.
-3. **Provide discovery** — expose the variable catalog, raw session document/sections, and iterators/callbacks to enumerate names.
-4. **Provide constants** — optional `keys.zig` with commonly used paths/names so callers avoid magic strings.
-5. **Keep parsing minimal** — decode types and copy rows from shared memory; let callers build higher-level models in their own code.
+2. **Pick the right access model** — **iRacing**: runtime catalog + session YAML lookup by name/path. **Fixed-layout simulators** (AC family, LMU, FH6): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
+3. **Provide discovery where it fits** — iRacing exposes a runtime variable catalog, session sections, and iterators. Fixed-layout simulators export `field_count` (comptime protocol field total) instead of a name catalog.
+4. **Provide constants sparingly** — `keys.zig` is for iRacing path/name constants. Fixed-layout simulators use protocol struct field names directly; do not duplicate them in a catalog.
+5. **Keep parsing minimal** — decode types and copy rows from shared memory or UDP; let callers build higher-level models in their own code.
 
 ## IRSDK patterns (iRacing) — useful for other titles
 
@@ -114,10 +121,10 @@ Work **one simulator at a time**. Typical steps:
 
 1. **Research** the official or community-documented telemetry interface (shared memory name, UDP port, packet layout, update rate).
 2. **Implement connection** in `src/simulators/<name>/` using `core/transport` helpers.
-3. **Define protocol structs** for wire format and a per-session variable catalog.
-4. **Expose a small public API** — connect, poll, lookup by key/path, and discovery (catalog + session sections). Provide **constants** for common keys/paths; do **not** bake opinionated structs that assume what callers need.
+3. **Define protocol structs** for the wire format. For iRacing, also build a per-session variable catalog from the IRSDK header.
+4. **Expose a small public API** — connect, poll, and either catalog/session lookup (iRacing) or typed snapshots + protocol string helpers (fixed-layout). Do **not** bake opinionated structs that assume what callers need.
 5. **Add one simple example** under `examples/<name>/simple.zig` using `examples/common/simple.zig` (comptime hooks).
-6. **Add a dashboard provider** under `examples/dashboard/providers/<name>.zig` that implements `connect`, `deinit`, `isConnected`, `poll`, `fillData`, and `connectErrorHint` for the shared `examples/common/dashboard.zig` `Data` snapshot.
+6. **Add a dashboard provider** under `examples/<name>/dashboard.zig` that implements `connect`, `deinit`, `isConnected`, `poll`, `fillData`, and optionally `connectErrorHint` for the shared `examples/common/dashboard.zig` `Data` snapshot.
 7. **Add tests** where parsing can be validated without a live game (fixture bytes, golden files). Live connection remains the examples’ job.
 
 Keep each simulator module self-contained. Prefer reusing `core/transport` over duplicating socket or mmap logic.
@@ -171,9 +178,56 @@ while (client.poll() == .ok) {
 Common paths and variable names live in `simulators/iracing/keys.zig`. Test-only IRSDK fixture
 builders live in `simulators/iracing/testing.zig`, which is intentionally not part of the public API.
 
+### Assetto Corsa public API (implemented)
+
+Design: **typed struct snapshots** as the primary API. Protocol structs mirror the wire layout;
+UTF-16 string fields decode via helpers on `Static` and `Graphics` (for example `trackUtf8`).
+
+```zig
+const ac = librace.simulators.ac;
+
+var client = try ac.connect(allocator, io, .{});
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const p = client.physics();
+    const g = client.graphics();
+    const st = client.static() orelse continue;
+
+    const speed_kmh = p.speed_kmh;
+    const gear = p.gear;
+    const session = g.sessionValue().label();
+
+    var buf: [96]u8 = undefined;
+    const track = st.trackUtf8(&buf);
+    const car = st.carModelUtf8(&buf);
+    _ = .{ speed_kmh, gear, session, track, car };
+}
+```
+
+`poll()` returns a `PollStatus` (`ok` / `disconnected` / `stale`). `protocol.field_count` is a
+comptime total of struct fields across the three pages (for discovery-style display).
+
+### Fixed-struct simulators (ACC, ACE, ACR, LMU, FH6)
+
+Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `keys.zig`, or generic
+`getNumber`/`resolve`/`read` helpers.
+
+| Simulator | Snapshots | String helpers |
+|-----------|-----------|----------------|
+| ACC | `physics()`, `graphics()`, `static()` | `trackUtf8`, `carModelUtf8`, `playerNameUtf8`, … (UTF-16) |
+| ACE | `physics()`, `graphics()`, `static()` | `trackName()`, `carModel()`, `driverName()` (ASCII C strings) |
+| ACR | `physics()`, `graphics()`, `static()` | Same UTF-16 helpers as AC; liveness via physics `packetId` |
+| LMU | `telemetry()`, `session()`, `vehicle()` | `trackNameUtf8`, `vehicleNameUtf8`, `driverNameUtf8` (ANSI) |
+| FH6 | `packet()` | `speedKmh()`, `displayGear()`, `formatCarSummary()` on the UDP packet struct |
+
+Each module re-exports `field_count` from `root.zig`. FH6 `poll()` accepts an optional timeout because
+telemetry arrives over UDP rather than shared memory.
+
 ## Examples
 
-Each simulator has a **simple** example; the **dashboard** is one program (`examples/dashboard/main.zig`) with per-sim **providers**.
+Each simulator has a **simple** example and a **dashboard** provider under `examples/<name>/`. The shared
+runner lives in `examples/common/dashboard_main.zig`; build produces `zig-out/bin/dashboard-<name>`.
 
 ### Shared modules (`examples/common/`)
 
@@ -183,14 +237,14 @@ Each simulator has a **simple** example; the **dashboard** is one program (`exam
 | `dashboard.zig` | ANSI terminal dashboard; providers fill a common `Data` snapshot |
 | `stub.zig` | `not_implemented` simple hooks for unimplemented simulators |
 
-Keep simulator-specific helpers out of `examples/common/` (e.g. connect-error text lives under `examples/iracing/` or in a provider).
+Keep simulator-specific helpers out of `examples/common/` (e.g. connect-error text lives in `examples/<name>/`).
 
 ### Wiring a new simulator dashboard provider
 
-1. Create `examples/dashboard/providers/<name>.zig` with a `Context` struct holding your SDK client.
+1. Create `examples/<name>/dashboard.zig` with a `Context` struct holding your SDK client.
 2. Implement `connect`, `deinit`, `isConnected`, `poll`, `fillData(ctx, *dashboard.Data)`, and optionally `connectErrorHint`.
-3. Map session paths and telemetry keys into the shared `dashboard.Data` fields in `fillData`.
-4. Register the provider in `build.zig` (`addDashboardExample`) when the sim is implemented; until then stubs use `providers/stub.zig` via `-Dsim=<name>`.
+3. Map protocol fields into the shared `dashboard.Data` fields in `fillData`.
+4. Register the provider in `build.zig` (`addDashboardForSim`) when the sim is implemented; until then stubs use `examples/common/stub.zig` via `-Dsim=<name>`.
 
 ### Build commands
 
@@ -198,12 +252,13 @@ Keep simulator-specific helpers out of `examples/common/` (e.g. connect-error te
 zig build test                      # Library unit tests
 zig build                           # Build all example binaries
 zig build run-<name>                # Simple smoke test
-zig build dashboard -Dsim=<name>    # Real-time dashboard for one simulator
+zig build run-dashboard-<name>      # Real-time dashboard for one simulator
+zig build dashboard -Dsim=<name>    # Alias for run-dashboard-<name>
 ```
 
-Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `lmu`.
+Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `lmu`, `fh6`.
 
-Binaries: `zig-out/bin/<name>` (simple), `zig-out/bin/dashboard` (shared dashboard).
+Binaries: `zig-out/bin/<name>` (simple), `zig-out/bin/dashboard-<name>` (dashboard).
 
 ### Simple example contract
 
@@ -237,7 +292,7 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 
 - Do not merge unrelated simulators into one module (AC and ACC have different layouts).
 - Do not add dependencies without a clear need; prefer std and platform APIs for mmap/UDP.
-- Do not remove or skip updating `examples/<name>/simple.zig` when implementing a simulator; add `examples/dashboard/providers/<name>.zig` for the shared dashboard.
+- Do not remove or skip updating `examples/<name>/simple.zig` when implementing a simulator; add `examples/<name>/dashboard.zig` for the dashboard.
 - Do not change `build.zig.zon` fingerprint unless intentionally forking the package identity.
 
 ## Current status
@@ -245,11 +300,11 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | Simulator | Status |
 |-----------|--------|
 | `iracing` | **Implemented** — IRSDK shared memory, variable catalog, session YAML scan, live poll |
-| `ace` | **Implemented** — AC Evo three-page shared memory (physics/graphics/static), comptime field catalog, typed + generic access, live poll |
-| `ac` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll |
-| `acr` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll (physics-`packetId` liveness; graphics page mostly unpopulated by the title) |
-| `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, comptime field catalog, typed + generic access, live poll |
-| `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings, comptime field catalog, typed + generic access, live poll |
-| `fh6` | **Implemented** — UDP Data Out (324-byte Horizon dash packet), comptime field catalog, typed + generic access, live poll |
+| `ace` | **Implemented** — AC Evo three-page shared memory (physics/graphics/static), typed struct snapshots with ASCII string helpers, live poll |
+| `ac` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, typed struct snapshots (`physics`/`graphics`/`static`) with wstring decode helpers on protocol structs, live poll |
+| `acr` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, typed struct snapshots with wstring helpers, live poll (physics-`packetId` liveness; graphics page mostly unpopulated by the title) |
+| `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, typed struct snapshots with wstring helpers, live poll |
+| `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings with decode helpers on protocol structs, live poll |
+| `fh6` | **Implemented** — UDP Data Out (324-byte Horizon dash packet), typed `packet()` snapshot access, live poll |
 
 Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles may reuse patterns from the iRacing IRSDK section or LMU's fixed-struct native shared-memory catalog, depending on their exposed telemetry interface.
