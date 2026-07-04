@@ -488,6 +488,18 @@ pub const Graphics = extern struct {
     pub fn engineTypeValue(self: *const Graphics) EngineType {
         return @enumFromInt(self.engine_type);
     }
+
+    pub fn carModel(self: *const Graphics) []const u8 {
+        return cString(&self.car_model);
+    }
+
+    pub fn driverName(self: *const Graphics) []const u8 {
+        return cString(&self.driver_name);
+    }
+
+    pub fn driverSurname(self: *const Graphics) []const u8 {
+        return cString(&self.driver_surname);
+    }
 };
 
 /// Static session metadata (`Local\\acevo_pmf_static`), written once when a session loads.
@@ -519,7 +531,23 @@ pub const Static = extern struct {
     pub fn startingGripValue(self: *const Static) StartingGrip {
         return @enumFromInt(self.starting_grip);
     }
+
+    pub fn trackName(self: *const Static) []const u8 {
+        return cString(&self.track);
+    }
+
+    pub fn trackConfiguration(self: *const Static) []const u8 {
+        return cString(&self.track_configuration);
+    }
 };
+
+fn comptimeStructFieldCount(comptime T: type) usize {
+    return @typeInfo(T).@"struct".fields.len;
+}
+
+pub const field_count = comptimeStructFieldCount(Physics) +
+    comptimeStructFieldCount(Graphics) +
+    comptimeStructFieldCount(Static);
 
 /// Trim a fixed-size C char buffer to its NUL-terminated string slice.
 pub fn cString(buf: []const u8) []const u8 {

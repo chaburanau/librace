@@ -51,15 +51,14 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
 
     data.header_left = "live";
     data.header_right = std.fmt.bufPrint(&ctx.header_right_buf, "fields={d} status={s}", .{
-        c.fieldCount(),
+        ace.field_count,
         @tagName(c.liveStatus()),
     }) catch "?";
 
-    // Session metadata — strings resolved generically by name.
-    const keys = ace.keys;
-    data.track = nonEmpty(c.getString(keys.static.track));
-    data.car = nonEmpty(c.getString(keys.graphics.car_model));
-    data.driver = formatDriver(ctx, c);
+    const st = c.static();
+    data.track = nonEmpty(if (st) |s| s.trackName() else null);
+    data.car = nonEmpty(g.carModel());
+    data.driver = formatDriver(ctx, g);
     // Enums keep their typed helpers (semantics live next to the field in protocol.zig).
     data.session_type = if (c.static()) |s| s.sessionValue().label() else "?";
     data.track_length = formatTrackLength(ctx, c);
@@ -97,9 +96,9 @@ pub fn fillData(ctx: *Context, data: *dashboard.Data) void {
     data.session_time = @as(f64, @floatFromInt(g.current_lap_time_ms)) / 1000.0;
     data.session_num = @floatFromInt(g.current_pos);
 
-    data.var_count = c.fieldCount();
+    data.var_count = ace.field_count;
     data.discovery_hint = std.fmt.bufPrint(&ctx.discovery_buf, "fields={d} pages=3", .{
-        c.fieldCount(),
+        ace.field_count,
     }) catch "?";
 }
 
@@ -108,9 +107,9 @@ fn nonEmpty(value: ?[]const u8) []const u8 {
     return if (s.len > 0) s else "?";
 }
 
-fn formatDriver(ctx: *Context, c: *const ace.Client) []const u8 {
-    const first = c.getString(ace.keys.graphics.driver_name) orelse "";
-    const last = c.getString(ace.keys.graphics.driver_surname) orelse "";
+fn formatDriver(ctx: *Context, g: *const ace.Graphics) []const u8 {
+    const first = g.driverName();
+    const last = g.driverSurname();
     if (first.len == 0 and last.len == 0) return "?";
     return std.fmt.bufPrint(&ctx.driver_buf, "{s} {s}", .{ first, last }) catch "?";
 }
