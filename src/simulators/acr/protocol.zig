@@ -13,7 +13,7 @@
 //!   matches the C layout — including the compiler-inserted padding after odd-length `wchar_t`
 //!   arrays (e.g. before the float that follows `tyre_compound`).
 //! - Strings are `wchar_t` (UTF-16LE, 2 bytes per code unit on Windows). They are modelled here
-//!   as `[N]u16`; decode them with `catalog.decodeWString` / `wcharToUtf8`.
+//!   as `[N]u16`; decode them with `Static.trackUtf8` / `protocol.wcharToUtf8`.
 //! - All scalars are little-endian (Windows/x86-64).
 //! - Pages are single, in-place structs (not ring-buffered). `packetId` (offset 0 on the
 //!   physics and graphics pages) increments on each update and is used to detect torn reads.
@@ -155,6 +155,11 @@ pub const Physics = extern struct {
     }
 };
 
+fn wstringFieldUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
+    const value = @field(self, field);
+    return wcharToUtf8(std.mem.asBytes(&value), out);
+}
+
 /// Per-frame HUD / session-progress telemetry (`Local\\acpmf_graphics`).
 pub const Graphics = extern struct {
     packet_id: i32 = 0,
@@ -257,7 +262,31 @@ pub const Static = extern struct {
     reversed_grid_positions: i32 = 0,
     pit_window_start: i32 = 0,
     pit_window_end: i32 = 0,
+
+    pub fn carModelUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("car_model", self, out);
+    }
+
+    pub fn trackUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("track", self, out);
+    }
+
+    pub fn playerNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_name", self, out);
+    }
+
+    pub fn playerSurnameUtf8(self: *const Static, out: []u8) ?[]const u8 {
+        return wstringFieldUtf8("player_surname", self, out);
+    }
 };
+
+fn comptimeStructFieldCount(comptime T: type) usize {
+    return @typeInfo(T).@"struct".fields.len;
+}
+
+pub const field_count = comptimeStructFieldCount(Physics) +
+    comptimeStructFieldCount(Graphics) +
+    comptimeStructFieldCount(Static);
 
 /// Decode a UTF-16LE (`wchar_t`) buffer into `out` as UTF-8, truncating at the NUL terminator.
 /// `src_bytes` is the raw little-endian byte view of an `[N]u16` field. Returns the written
