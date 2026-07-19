@@ -94,7 +94,7 @@ pub fn run(
             .connect_error = @errorName(err),
         };
     };
-    defer Hooks.deinit(ctx);
+    defer Hooks.deinit(ctx, io);
 
     if (!Hooks.isConnected(ctx)) {
         try stdout.print("FAIL not_connected\n", .{});
@@ -107,7 +107,7 @@ pub fn run(
     var got_sample = false;
     var i: u32 = 0;
     while (i < cfg.sample_count) : (i += 1) {
-        if (!Hooks.poll(ctx)) {
+        if (!Hooks.poll(ctx, io)) {
             try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(cfg.poll_interval_ms), .real);
             continue;
         }

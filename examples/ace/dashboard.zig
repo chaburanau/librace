@@ -22,7 +22,7 @@ pub fn connect(ctx: *Context, io: std.Io) !void {
     ctx.client = try ace.connect(std.heap.page_allocator, io, .{});
 }
 
-pub fn deinit(ctx: *Context) void {
+pub fn deinit(ctx: *Context, _: std.Io) void {
     if (ctx.client) |*c| c.deinit();
     ctx.client = null;
 }
@@ -31,7 +31,7 @@ pub fn isConnected(ctx: *Context) bool {
     return ctx.client.?.isConnected();
 }
 
-pub fn poll(ctx: *Context) bool {
+pub fn poll(ctx: *Context, _: std.Io) bool {
     return ctx.client.?.poll().isOk();
 }
 

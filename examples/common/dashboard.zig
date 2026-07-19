@@ -350,7 +350,7 @@ pub fn run(
         try stderr.flush();
         return err;
     };
-    defer Provider.deinit(ctx);
+    defer Provider.deinit(ctx, io);
 
     var stdout_buffer: [8192]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
@@ -371,7 +371,7 @@ pub fn run(
             break;
         }
 
-        _ = Provider.poll(ctx);
+        _ = Provider.poll(ctx, io);
 
         var data: Data = .{};
         Provider.fillData(ctx, &data);

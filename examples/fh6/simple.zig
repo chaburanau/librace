@@ -5,18 +5,21 @@ const example_common = @import("example_common");
 const fh6 = librace.simulators.fh6;
 const simple = example_common.simple;
 const connect_timeout = std.Io.Duration.fromSeconds(30);
-const poll_timeout = std.Io.Duration.fromSeconds(30);
+const poll_timeout: std.Io.Timeout = .{ .duration = .{
+    .raw = std.Io.Duration.fromSeconds(30),
+    .clock = .awake,
+} };
 
 const Context = struct {
     client: ?fh6.Client = null,
     car_buf: [64]u8 = undefined,
 
     pub fn connect(ctx: *Context, io: std.Io) !void {
-        ctx.client = try fh6.connect(std.heap.page_allocator, io, .{ .timeout = connect_timeout });
+        ctx.client = try fh6.connect(io, .{ .timeout = connect_timeout });
     }
 
-    pub fn deinit(ctx: *Context) void {
-        if (ctx.client) |*c| c.deinit();
+    pub fn deinit(ctx: *Context, io: std.Io) void {
+        if (ctx.client) |*c| c.deinit(io);
         ctx.client = null;
     }
 
@@ -24,8 +27,8 @@ const Context = struct {
         return ctx.client != null;
     }
 
-    pub fn poll(ctx: *Context) bool {
-        return ctx.client.?.poll(poll_timeout).isOk();
+    pub fn poll(ctx: *Context, io: std.Io) bool {
+        return (ctx.client.?.poll(io, poll_timeout) catch return false).isOk();
     }
 
     pub fn varCount(_: *Context) usize {

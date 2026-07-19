@@ -3,8 +3,7 @@
 //! Some simulators broadcast telemetry over UDP (often alongside shared memory).
 //! Per-simulator packet layouts and ports live in `simulators/`.
 //!
-//! Uses `std.Io.net` with blocking datagram receive. Callers that need a
-//! responsive poll loop without blocking should wrap the listener in a thread.
+//! Uses `std.Io.net`; receive behavior is controlled with [`std.Io.Timeout`].
 
 const std = @import("std");
 const net = std.Io.net;
@@ -38,21 +37,15 @@ pub const UdpListener = struct {
         self.socket.close(io);
     }
 
-    /// Blocks until a datagram arrives. Payload is written into `buffer`; the
-    /// returned slice aliases `buffer`.
-    pub fn recv(self: *const UdpListener, io: std.Io, buffer: []u8) net.Socket.ReceiveError!net.IncomingMessage {
-        return self.socket.receive(io, buffer);
-    }
-
-    /// Waits up to `timeout` for a datagram. Payload is written into `buffer`;
-    /// the returned slice aliases `buffer`.
-    pub fn recvTimeout(
+    /// Receives a datagram according to `timeout`. Payload is written into
+    /// `buffer`; the returned slice aliases `buffer`.
+    pub fn recv(
         self: *const UdpListener,
         io: std.Io,
         buffer: []u8,
-        timeout: std.Io.Duration,
+        timeout: std.Io.Timeout,
     ) net.Socket.ReceiveTimeoutError!net.IncomingMessage {
-        return self.socket.receiveTimeout(io, buffer, .{ .duration = .{ .raw = timeout, .clock = .real } });
+        return self.socket.receiveTimeout(io, buffer, timeout);
     }
 };
 

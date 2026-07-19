@@ -286,11 +286,14 @@ FH6 broadcasts a fixed 324-byte UDP datagram while driving. Enable **Settings â†
 ```zig
 const fh6 = librace.simulators.fh6;
 
-var client = try fh6.connect(allocator, io, .{});
-defer client.deinit();
+var client = try fh6.connect(io, .{});
+defer client.deinit(io);
 
-const poll_timeout = std.Io.Duration.fromMilliseconds(500);
-while (client.poll(poll_timeout) == .ok) {
+const poll_timeout: std.Io.Timeout = .{ .duration = .{
+    .raw = std.Io.Duration.fromMilliseconds(500),
+    .clock = .awake,
+} };
+while (try client.poll(io, poll_timeout) == .ok) {
     const p = client.packet();
 
     var buf: [64]u8 = undefined;

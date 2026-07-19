@@ -13,6 +13,7 @@ pub const name = "Forza Horizon 6";
 pub const transport = core.types.TransportKind.udp;
 
 pub const ConnectError = client.ConnectError;
+pub const PollError = client.PollError;
 pub const PollStatus = client.PollStatus;
 pub const Client = client.Client;
 pub const Config = client.Config;
@@ -25,9 +26,8 @@ pub const default_port = protocol.default_port;
 pub const packet_size = protocol.packet_size;
 pub const field_count = protocol.field_count;
 
-pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions) ConnectError!Client {
+pub fn connect(io: std.Io, options: ConnectOptions) ConnectError!Client {
     return core.connect.retry(Client, ConnectError, ConnectContext, io, .{
-        .allocator = allocator,
         .io = io,
         .config = options.config,
     }, .{
@@ -37,13 +37,12 @@ pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions
 }
 
 const ConnectContext = struct {
-    allocator: std.mem.Allocator,
     io: std.Io,
     config: Config,
 };
 
 fn connectOnce(ctx: ConnectContext) ConnectError!Client {
-    return Client.connect(ctx.allocator, ctx.io, ctx.config);
+    return Client.connect(ctx.io, ctx.config);
 }
 
 fn isRetryableConnectError(err: ConnectError) bool {

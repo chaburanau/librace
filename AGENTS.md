@@ -221,8 +221,8 @@ Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `k
 | LMU | `telemetry()`, `session()`, `vehicle()` | `trackNameUtf8`, `vehicleNameUtf8`, `driverNameUtf8` (ANSI) |
 | FH6 | `packet()` | `speedKmh()`, `displayGear()`, `formatCarSummary()` on the UDP packet struct |
 
-Each module re-exports `field_count` from `root.zig`. FH6 `poll()` accepts an optional timeout because
-telemetry arrives over UDP rather than shared memory.
+Each module re-exports `field_count` from `root.zig`. FH6 passes `std.Io` into `poll()` and accepts
+`std.Io.Timeout` because telemetry arrives over UDP rather than shared memory.
 
 ## Examples
 

@@ -13,7 +13,10 @@ const steer_to_deg: f64 = 900.0 / 127.0;
 
 /// Allow time for a conflicting telemetry app to release the UDP port before giving up.
 const connect_timeout = std.Io.Duration.fromSeconds(120);
-const poll_timeout = std.Io.Duration.fromMilliseconds(500);
+const poll_timeout: std.Io.Timeout = .{ .duration = .{
+    .raw = std.Io.Duration.fromMilliseconds(500),
+    .clock = .awake,
+} };
 
 pub const Context = struct {
     client: ?fh6.Client = null,
@@ -23,11 +26,11 @@ pub const Context = struct {
 };
 
 pub fn connect(ctx: *Context, io: std.Io) !void {
-    ctx.client = try fh6.connect(std.heap.page_allocator, io, .{ .timeout = connect_timeout });
+    ctx.client = try fh6.connect(io, .{ .timeout = connect_timeout });
 }
 
-pub fn deinit(ctx: *Context) void {
-    if (ctx.client) |*c| c.deinit();
+pub fn deinit(ctx: *Context, io: std.Io) void {
+    if (ctx.client) |*c| c.deinit(io);
     ctx.client = null;
 }
 
@@ -35,8 +38,8 @@ pub fn isConnected(ctx: *Context) bool {
     return ctx.client != null;
 }
 
-pub fn poll(ctx: *Context) bool {
-    return ctx.client.?.poll(poll_timeout).isOk();
+pub fn poll(ctx: *Context, io: std.Io) bool {
+    return (ctx.client.?.poll(io, poll_timeout) catch return false).isOk();
 }
 
 pub fn connectErrorHint(_: *Context, err: anyerror, w: *std.Io.Writer) !void {
