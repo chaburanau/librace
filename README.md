@@ -8,10 +8,10 @@ librace is a Zig library that connects to racing games and simulators through wh
 
 | Shape | Simulators | How you read data |
 |-------|------------|-------------------|
-| **Dynamic catalog** | iRacing | Runtime variable catalog + session YAML; lookup by name/path (`getNumber`, `sessionGet`, optional `keys.zig`) |
+| **Dynamic snapshots** | iRacing | Lazy variable-header snapshots, indexed values, and an owned typed session tree |
 | **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6 | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()`, etc.); string helpers on `protocol` structs |
 
-The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from the protocol layout or IRSDK catalog.
+The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from protocol layouts or snapshots.
 
 ## Supported simulators
 
@@ -108,7 +108,7 @@ Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name
 
 Add librace as a dependency in your `build.zig.zon`, then import the module in your project.
 
-### iRacing (dynamic catalog)
+### iRacing (dynamic telemetry)
 
 ```zig
 const librace = @import("librace");
@@ -120,31 +120,47 @@ defer client.deinit();
 // To wait for the simulator to start:
 // var client = try ir.connect(allocator, io, .{ .timeout = std.Io.Duration.fromSeconds(30) });
 
-while (client.poll() == .ok) {
-    // Strict typed read, or lenient numeric read.
-    const gear = try client.getAs(i32, ir.keys.var_name.gear);
-    const speed = client.getNumber(ir.keys.var_name.speed) orelse 0;
+// Name lookup is allocation-free. Cache handles until variables().version() changes.
+const speed = (try client.variables().find(ir.keys.var_name.speed)).?;
 
-    // Session metadata. Use playerDriverGet for the player's car in multi-car sessions.
-    const track = client.sessionGet(ir.keys.session.track_display_name);
-    const car = client.playerDriverGet(ir.keys.driver.car_screen_name);
-    _ = .{ gear, speed, track, car };
+// Session YAML is copied only when requested and queried without building a tree.
+var session = try client.session().snapshot();
+defer session.deinit();
+const track_value = (try session.query(&.{
+    .{ .key = ir.keys.session.weekend_info },
+    .{ .key = ir.keys.session.track_display_name },
+})).?;
+var track_buffer: [128]u8 = undefined;
+const track = try track_value.string(&track_buffer);
+
+while (client.waitAndPoll(std.Io.Duration.fromMilliseconds(100)).isOk()) {
+    const speed_ms = (try client.variables().value(speed)).asFloat().?;
+    _ = .{ speed_ms, track };
 }
 ```
 
-For hot loops, resolve a `VarHandle` once and read many times, or bind a typed struct whose
-field names match IRSDK variable names:
+`poll()` returns `updated`, `unchanged`, `stale`, `disconnected`, or `rebuild_failed`. New rows are
+copied with torn-read detection; unchanged ticks avoid the copy. Variable lookup and descriptor
+iteration allocate nothing, and cached handles read directly from the owned row. A handle becomes
+stale only after a catalog change, reconnect, or tick reset. Array values borrow the row until the
+next successful update.
+
+Session snapshots make one owned YAML copy. Structured `.key`, `.index`, and `.select` queries scan
+only requested branches and allocate nothing; escaped or legacy CP1252 strings use caller storage.
+The data-valid event is opened only if `waitAndPoll()` is used. The default no-update liveness
+timeout is 30 seconds and can be changed or disabled with `ConnectOptions.stale_timeout`.
+
+Simulator control is independent of telemetry:
 
 ```zig
-const Telemetry = struct { Speed: f32 = 0, Gear: i32 = 0, RPM: f32 = 0 };
-
-var telemetry = client.bind(Telemetry);
-while (client.poll() == .ok) {
-    telemetry.update();
-    const v = telemetry.values; // v.Speed, v.Gear, v.RPM
-    _ = v;
-}
+var controller = try ir.Controller.init();
+try controller.send(.{ .telemetry_command = .start });
+try controller.send(.{ .pit_command = .{ .mode = .fuel, .parameter = 20 } });
 ```
+
+`ir.enums` mirrors every enum in the current C++ `irsdk_defines.h`, while `ir.commands` exposes
+typed packing and a raw forward-compatible send path. Broadcasts are Windows-only and
+fire-and-forget; iRacing does not acknowledge command execution.
 
 ### Assetto Corsa Evo
 

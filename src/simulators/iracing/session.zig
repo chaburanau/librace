@@ -1,420 +1,435 @@
-//! IRSDK session-info (YAML) access by path and section.
-//!
-//! Full session info is a large YAML document in shared memory. This module provides
-//! lightweight path/section lookup without a full YAML parser.
-//!
-//! Path format: `Section/Key` for top-level keys, or `Section/Nested/.../Key` for nested
-//! maps. Array/list items are matched by key name (first occurrence in the section).
+//! One-copy, lazy queries over the small YAML subset emitted by IRSDK.
 
 const std = @import("std");
 
-/// Fetch a scalar value using a slash-separated path (`WeekendInfo/TrackName`).
-///
-/// The first segment is always a top-level section name. Remaining segments walk nested
-/// YAML maps; a single remaining segment uses first-match key lookup within the section.
-pub fn getByPath(yaml: []const u8, path: []const u8) ?[]const u8 {
-    if (std.mem.indexOfScalar(u8, path, '/')) |slash| {
-        const section = path[0..slash];
-        const rest = path[slash + 1 ..];
-        const section_yaml = extractSection(yaml, section) orelse return null;
-        if (std.mem.indexOfScalar(u8, rest, '/')) |_| {
-            return extractNestedKey(section_yaml, rest);
-        }
-        return extractKey(section_yaml, rest);
-    }
-    return extractKey(yaml, path);
-}
-
-/// Extract a top-level YAML section body (e.g. `WeekendInfo`, `DriverInfo`).
-pub fn extractSection(yaml: []const u8, section: []const u8) ?[]const u8 {
-    var needle_buf: [128]u8 = undefined;
-    if (section.len + 3 > needle_buf.len) return null;
-
-    const needle_nl = std.fmt.bufPrint(&needle_buf, "\n{s}:\n", .{section}) catch return null;
-    const start = blk: {
-        if (std.mem.indexOf(u8, yaml, needle_nl)) |idx| break :blk idx + 1;
-        const prefix = std.fmt.bufPrint(&needle_buf, "{s}:\n", .{section}) catch return null;
-        if (std.mem.startsWith(u8, yaml, prefix)) break :blk 0;
-        return null;
-    };
-
-    const body_start = start + section.len + 1; // skip "Section:"
-    if (body_start >= yaml.len) return null;
-
-    const rest = yaml[body_start..];
-    const end = std.mem.indexOf(u8, rest, "\n\n") orelse yaml.len - body_start;
-    return std.mem.trim(u8, rest[0..end], "\n");
-}
-
-/// Within a YAML fragment, locate the list under `list_key:` and return the raw text of the
-/// first item whose `match_key:` equals `match_value`.
-///
-/// List items are blocks introduced by a `-` marker (iRacing uses `Section/List` of maps,
-/// e.g. `DriverInfo/Drivers`). An item extends until the next sibling marker or a dedent out
-/// of the list. The returned slice can be passed to `extractKey` to read a field from it.
-pub fn listItemMatching(
-    yaml: []const u8,
-    list_key: []const u8,
-    match_key: []const u8,
-    match_value: []const u8,
-) ?[]const u8 {
-    const list = findListBody(yaml, list_key) orelse return null;
-    const body = list.body;
-
-    var item_start: ?usize = null;
-    var line_start: usize = 0;
-    while (line_start <= body.len) {
-        const nl = std.mem.indexOfScalarPos(u8, body, line_start, '\n') orelse body.len;
-        const line = body[line_start..nl];
-        const indent = leadingSpaces(line);
-        const is_marker = indent == list.marker_indent and indent < line.len and line[indent] == '-';
-        if (is_marker) {
-            if (item_start) |s| {
-                const item = std.mem.trimEnd(u8, body[s..line_start], "\n");
-                if (itemMatches(item, match_key, match_value)) return item;
-            }
-            item_start = line_start;
-        }
-        if (nl == body.len) break;
-        line_start = nl + 1;
-    }
-    if (item_start) |s| {
-        const item = std.mem.trimEnd(u8, body[s..], "\n");
-        if (itemMatches(item, match_key, match_value)) return item;
-    }
-    return null;
-}
-
-fn itemMatches(item: []const u8, match_key: []const u8, match_value: []const u8) bool {
-    const value = extractKey(item, match_key) orelse return false;
-    return std.mem.eql(u8, value, match_value);
-}
-
-fn leadingSpaces(line: []const u8) usize {
-    var n: usize = 0;
-    while (n < line.len and line[n] == ' ') : (n += 1) {}
-    return n;
-}
-
-const ListBody = struct {
-    body: []const u8,
-    marker_indent: usize,
+pub const ParseError = std.mem.Allocator.Error;
+pub const ScalarError = error{ TypeMismatch, InvalidScalar, UnsupportedEscape, BufferTooSmall };
+pub const QueryError = ScalarError || error{
+    InvalidIndentation,
+    MalformedMapping,
+    UnsupportedConstruct,
+    ExpectedScalar,
 };
 
-/// Return the body of a YAML block list under `key:`, spanning all `-` items.
-///
-/// iRacing places list markers at the same indentation as the parent key's siblings, so the
-/// list is terminated by a line at or above the key's indent that is *not* a `-` marker.
-fn findListBody(yaml: []const u8, key: []const u8) ?ListBody {
-    var needle_buf: [128]u8 = undefined;
-    if (key.len + 2 > needle_buf.len) return null;
-    const needle = std.fmt.bufPrint(&needle_buf, "{s}:", .{key}) catch return null;
+pub const ScalarKind = enum { string, int, float, bool, null };
 
-    var search_start: usize = 0;
-    while (search_start < yaml.len) {
-        const rel = std.mem.indexOfPos(u8, yaml, search_start, needle) orelse return null;
-        const line_start = blk: {
-            var i = rel;
-            while (i > 0 and yaml[i - 1] != '\n') : (i -= 1) {}
-            break :blk i;
+pub const Scalar = struct {
+    raw: []const u8,
+    style: Style,
+
+    pub const Style = enum { plain, single_quoted, double_quoted };
+
+    pub fn kind(self: Scalar) ScalarKind {
+        if (self.style != .plain) return .string;
+        if (isNullText(self.raw)) return .null;
+        if (isBoolText(self.raw)) return .bool;
+        return numberKind(self.raw) orelse .string;
+    }
+
+    pub fn asInt(self: Scalar) ScalarError!i64 {
+        if (self.kind() != .int) return error.TypeMismatch;
+        return std.fmt.parseInt(i64, self.raw, 10) catch error.InvalidScalar;
+    }
+
+    pub fn asFloat(self: Scalar) ScalarError!f64 {
+        if (self.kind() != .float) return error.TypeMismatch;
+        return std.fmt.parseFloat(f64, self.raw) catch error.InvalidScalar;
+    }
+
+    pub fn asBool(self: Scalar) ScalarError!bool {
+        if (self.style != .plain) return error.TypeMismatch;
+        if (std.ascii.eqlIgnoreCase(self.raw, "true")) return true;
+        if (std.ascii.eqlIgnoreCase(self.raw, "false")) return false;
+        return error.TypeMismatch;
+    }
+
+    pub fn isNull(self: Scalar) bool {
+        return self.style == .plain and isNullText(self.raw);
+    }
+
+    /// Returns snapshot-owned UTF-8 when possible. Escaped or CP1252 text is
+    /// decoded into `buffer`.
+    pub fn string(self: Scalar, buffer: []u8) ScalarError![]const u8 {
+        if (self.kind() != .string) return error.TypeMismatch;
+        if (!needsDecode(self) and std.unicode.utf8ValidateSlice(self.raw)) return self.raw;
+        var sink = Sink{ .buffer = buffer };
+        try decode(self, &sink);
+        return buffer[0..sink.len];
+    }
+};
+
+pub const PathSegment = union(enum) {
+    key: []const u8,
+    index: usize,
+    select: Selection,
+};
+pub const Selection = struct { key: []const u8, value: MatchValue };
+pub const MatchValue = union(enum) { string: []const u8, int: i64, bool: bool, null };
+
+pub const Snapshot = struct {
+    allocator: std.mem.Allocator,
+    yaml: []u8,
+    version: i32,
+
+    pub fn deinit(self: *Snapshot) void {
+        self.allocator.free(self.yaml);
+        self.* = undefined;
+    }
+
+    /// Performs no allocation. Returned scalar bytes borrow this snapshot.
+    pub fn query(self: *const Snapshot, path: []const PathSegment) QueryError!?Scalar {
+        var node = try rootNode(self.yaml);
+        for (path) |segment| {
+            node = (switch (segment) {
+                .key => |key| try findKey(node, key),
+                .index => |index| try findIndex(node, index),
+                .select => |selection| try findSelection(node, selection),
+            }) orelse return null;
+        }
+        return switch (node.kind) {
+            .scalar => node.scalar,
+            else => error.ExpectedScalar,
         };
-        // Only spaces may precede the key on its line (otherwise it's a substring match).
-        if (!isAllSpaces(yaml[line_start..rel])) {
-            search_start = rel + needle.len;
-            continue;
+    }
+};
+
+pub fn parse(allocator: std.mem.Allocator, yaml: []const u8, version: i32) ParseError!Snapshot {
+    return .{ .allocator = allocator, .yaml = try allocator.dupe(u8, yaml), .version = version };
+}
+
+const NodeKind = enum { map, list, scalar };
+const Node = struct {
+    kind: NodeKind,
+    body: []const u8 = "",
+    indent: usize = 0,
+    first: ?[]const u8 = null,
+    scalar: Scalar = .{ .raw = "", .style = .plain },
+};
+const Line = struct { indent: usize, text: []const u8, rest: []const u8, source: []const u8 };
+
+fn rootNode(yaml: []const u8) QueryError!Node {
+    var body = yaml;
+    var line = nextLine(&body) orelse return error.ExpectedScalar;
+    if (line.indent == bad_indent) return error.InvalidIndentation;
+    if (std.mem.eql(u8, line.text, "---"))
+        line = nextLine(&body) orelse return error.ExpectedScalar;
+    if (line.indent != 0 or isList(line.text)) return error.InvalidIndentation;
+    return .{ .kind = .map, .body = line.source, .indent = 0 };
+}
+
+fn findKey(node: Node, wanted: []const u8) QueryError!?Node {
+    if (node.kind != .map) return error.TypeMismatch;
+    if (node.first) |first| {
+        const parts = try mapping(first);
+        if (std.mem.eql(u8, parts.key, wanted)) return try scalarNode(parts.value);
+    }
+
+    var body = node.body;
+    while (nextLine(&body)) |line| {
+        if (line.indent == bad_indent) return error.InvalidIndentation;
+        if (line.indent < node.indent or isEnd(line.text)) break;
+        if (line.indent != node.indent or isList(line.text)) continue;
+        const parts = try mapping(line.text);
+        if (!std.mem.eql(u8, parts.key, wanted)) continue;
+        if (parts.value.len != 0) return try scalarNode(parts.value);
+
+        var following = line.rest;
+        const child = nextLine(&following) orelse return nullNode();
+        if (child.indent == bad_indent) return error.InvalidIndentation;
+        if (child.indent < line.indent) return nullNode();
+        if (child.indent == line.indent) {
+            // IRSDK places list markers at their key's indentation.
+            if (isList(child.text))
+                return .{ .kind = .list, .body = line.rest, .indent = child.indent };
+            return nullNode();
         }
-        const parent_indent = rel - line_start;
-
-        const key_line_end = std.mem.indexOfScalarPos(u8, yaml, rel, '\n') orelse return null;
-        const body_start = key_line_end + 1;
-        if (body_start >= yaml.len) return null;
-
-        var marker_indent: ?usize = null;
-        var body_end = yaml.len;
-        var ls = body_start;
-        while (ls < yaml.len) {
-            const nl = std.mem.indexOfScalarPos(u8, yaml, ls, '\n') orelse yaml.len;
-            const line = yaml[ls..nl];
-            const indent = leadingSpaces(line);
-            const is_blank = indent == line.len;
-            if (!is_blank) {
-                const is_marker = indent < line.len and line[indent] == '-';
-                if (!is_marker and indent <= parent_indent) {
-                    body_end = ls;
-                    break;
-                }
-                if (is_marker and marker_indent == null) marker_indent = indent;
-            }
-            if (nl == yaml.len) break;
-            ls = nl + 1;
-        }
-
-        const mi = marker_indent orelse return null;
         return .{
-            .body = std.mem.trimEnd(u8, yaml[body_start..body_end], "\n"),
-            .marker_indent = mi,
+            .kind = if (isList(child.text)) .list else .map,
+            .body = line.rest,
+            .indent = child.indent,
         };
     }
     return null;
 }
 
-fn isAllSpaces(s: []const u8) bool {
-    for (s) |c| {
-        if (c != ' ') return false;
+fn findIndex(node: Node, wanted: usize) QueryError!?Node {
+    if (node.kind != .list) return error.TypeMismatch;
+    var body = node.body;
+    var index: usize = 0;
+    while (nextLine(&body)) |line| {
+        if (line.indent == bad_indent) return error.InvalidIndentation;
+        if (line.indent < node.indent or (line.indent == node.indent and !isList(line.text))) break;
+        if (line.indent != node.indent) continue;
+        if (index == wanted) return try listItem(line);
+        index += 1;
     }
-    return true;
-}
-
-/// Scan a YAML fragment for `key: value` (first match).
-pub fn extractKey(yaml: []const u8, key: []const u8) ?[]const u8 {
-    var needle_buf: [128]u8 = undefined;
-    if (key.len + 2 > needle_buf.len) return null;
-    const needle = std.fmt.bufPrint(&needle_buf, "{s}:", .{key}) catch return null;
-
-    var search_start: usize = 0;
-    while (search_start < yaml.len) {
-        const rel = std.mem.indexOfPos(u8, yaml, search_start, needle) orelse return null;
-        if (rel > 0 and yaml[rel - 1] != '\n' and yaml[rel - 1] != ' ' and yaml[rel - 1] != '-') {
-            search_start = rel + needle.len;
-            continue;
-        }
-
-        const after_key = rel + needle.len;
-        if (after_key >= yaml.len) return null;
-
-        var value_start = after_key;
-        while (value_start < yaml.len and yaml[value_start] == ' ') : (value_start += 1) {}
-
-        const rest = yaml[value_start..];
-        const line_end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
-        const raw = std.mem.trim(u8, rest[0..line_end], " \t\r");
-        if (raw.len == 0) return null;
-
-        return parseScalar(raw);
-    }
-
     return null;
 }
 
-fn parseScalar(raw: []const u8) ?[]const u8 {
+fn findSelection(node: Node, selection: Selection) QueryError!?Node {
+    if (node.kind != .list) return error.TypeMismatch;
+    var body = node.body;
+    while (nextLine(&body)) |line| {
+        if (line.indent == bad_indent) return error.InvalidIndentation;
+        if (line.indent < node.indent or (line.indent == node.indent and !isList(line.text))) break;
+        if (line.indent != node.indent) continue;
+        const item = try listItem(line);
+        const field = (try findKey(item, selection.key)) orelse continue;
+        if (field.kind == .scalar and try matches(field.scalar, selection.value)) return item;
+    }
+    return null;
+}
+
+fn listItem(line: Line) QueryError!Node {
+    const text = std.mem.trim(u8, line.text[1..], " ");
+    if (text.len == 0) {
+        var body = line.rest;
+        const child = nextLine(&body) orelse return nullNode();
+        if (child.indent <= line.indent) return nullNode();
+        return .{
+            .kind = if (isList(child.text)) .list else .map,
+            .body = line.rest,
+            .indent = child.indent,
+        };
+    }
+    if (mappingColon(text) != null) return .{
+        .kind = .map,
+        .body = line.rest,
+        .indent = line.indent + 2,
+        .first = text,
+    };
+    return scalarNode(text);
+}
+
+const Parts = struct { key: []const u8, value: []const u8 };
+
+fn mapping(text: []const u8) QueryError!Parts {
+    const colon = mappingColon(text) orelse return error.MalformedMapping;
+    const key = std.mem.trim(u8, text[0..colon], " ");
+    if (key.len == 0) return error.MalformedMapping;
+    return .{ .key = key, .value = std.mem.trim(u8, text[colon + 1 ..], " ") };
+}
+
+fn mappingColon(text: []const u8) ?usize {
+    var quote: ?u8 = null;
+    var escaped = false;
+    for (text, 0..) |byte, index| {
+        if (escaped) {
+            escaped = false;
+        } else if (quote == '"' and byte == '\\') {
+            escaped = true;
+        } else if (byte == '"' or byte == '\'') {
+            if (quote == byte) quote = null else if (quote == null) quote = byte;
+        } else if (quote == null and byte == ':' and
+            (index + 1 == text.len or text[index + 1] == ' ')) return index;
+    }
+    return null;
+}
+
+fn scalarNode(input: []const u8) QueryError!Node {
+    const raw = std.mem.trim(u8, input, " ");
+    if (raw.len == 0) return nullNode();
+    if (raw[0] == '"' or raw[0] == '\'') {
+        if (raw.len < 2 or raw[raw.len - 1] != raw[0]) return error.InvalidScalar;
+        return .{ .kind = .scalar, .scalar = .{
+            .raw = raw[1 .. raw.len - 1],
+            .style = if (raw[0] == '"') .double_quoted else .single_quoted,
+        } };
+    }
+    if (std.mem.indexOfScalar(u8, "[{&*!|>@", raw[0]) != null)
+        return error.UnsupportedConstruct;
+    return .{ .kind = .scalar, .scalar = .{ .raw = raw, .style = .plain } };
+}
+
+fn nullNode() Node {
+    return .{ .kind = .scalar };
+}
+
+const bad_indent = std.math.maxInt(usize);
+
+fn nextLine(body: *[]const u8) ?Line {
+    while (body.*.len != 0) {
+        const source = body.*;
+        const end = std.mem.indexOfScalar(u8, body.*, '\n') orelse body.*.len;
+        var raw = body.*[0..end];
+        const rest = if (end < body.*.len) body.*[end + 1 ..] else body.*[end..];
+        body.* = rest;
+        if (raw.len != 0 and raw[raw.len - 1] == '\r') raw = raw[0 .. raw.len - 1];
+        var indent: usize = 0;
+        while (indent < raw.len and raw[indent] == ' ') : (indent += 1) {}
+        if (indent == raw.len) continue;
+        if (raw[indent] == '\t') indent = bad_indent;
+        return .{ .indent = indent, .text = if (indent == bad_indent) raw else raw[indent..], .rest = rest, .source = source };
+    }
+    return null;
+}
+
+fn isList(text: []const u8) bool {
+    return text.len != 0 and text[0] == '-' and (text.len == 1 or text[1] == ' ');
+}
+fn isEnd(text: []const u8) bool {
+    return std.mem.eql(u8, text, "...") or std.mem.eql(u8, text, "---");
+}
+fn isNullText(raw: []const u8) bool {
+    return raw.len == 0 or std.mem.eql(u8, raw, "~") or std.ascii.eqlIgnoreCase(raw, "null");
+}
+fn isBoolText(raw: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(raw, "true") or std.ascii.eqlIgnoreCase(raw, "false");
+}
+
+fn numberKind(raw: []const u8) ?ScalarKind {
+    var float = false;
+    for (raw) |byte| switch (byte) {
+        '0'...'9', '+', '-' => {},
+        '.', 'e', 'E' => float = true,
+        else => return null,
+    };
     if (raw.len == 0) return null;
-    if (raw[0] == '"') {
-        if (raw.len >= 2 and raw[raw.len - 1] == '"') return raw[1 .. raw.len - 1];
-        return raw;
+    if (float) {
+        _ = std.fmt.parseFloat(f64, raw) catch return null;
+        return .float;
     }
-    return raw;
+    _ = std.fmt.parseInt(i64, raw, 10) catch return null;
+    return .int;
 }
 
-/// Walk nested map keys (`Parent/Child/Leaf`) within a YAML fragment.
-fn extractNestedKey(yaml: []const u8, key_path: []const u8) ?[]const u8 {
-    var rest = key_path;
-    var fragment = yaml;
-    while (true) {
-        const slash = std.mem.indexOfScalar(u8, rest, '/');
-        if (slash) |s| {
-            const segment = rest[0..s];
-            fragment = extractKeyBlock(fragment, segment) orelse return null;
-            rest = rest[s + 1 ..];
-        } else {
-            return extractKey(fragment, rest);
-        }
-    }
+fn matches(scalar: Scalar, expected: MatchValue) ScalarError!bool {
+    return switch (expected) {
+        .int => |value| (scalar.asInt() catch return false) == value,
+        .bool => |value| (scalar.asBool() catch return false) == value,
+        .null => scalar.isNull(),
+        .string => |value| blk: {
+            if (scalar.kind() != .string) break :blk false;
+            var sink = Sink{ .expected = value };
+            try decode(scalar, &sink);
+            break :blk sink.matches and sink.len == value.len;
+        },
+    };
 }
 
-/// Return the indented block body under `key:` within a YAML fragment.
-fn extractKeyBlock(yaml: []const u8, key: []const u8) ?[]const u8 {
-    var needle_buf: [128]u8 = undefined;
-    if (key.len + 2 > needle_buf.len) return null;
-    const needle = std.fmt.bufPrint(&needle_buf, "{s}:", .{key}) catch return null;
-
-    var search_start: usize = 0;
-    while (search_start < yaml.len) {
-        const rel = std.mem.indexOfPos(u8, yaml, search_start, needle) orelse return null;
-        if (rel > 0 and yaml[rel - 1] != '\n' and yaml[rel - 1] != ' ' and yaml[rel - 1] != '-') {
-            search_start = rel + needle.len;
-            continue;
-        }
-
-        const line_start = blk: {
-            var i = rel;
-            while (i > 0 and yaml[i - 1] != '\n') : (i -= 1) {}
-            break :blk i;
-        };
-        const parent_indent = rel - line_start;
-
-        const after_key = rel + needle.len;
-        if (after_key >= yaml.len) return null;
-
-        var value_start = after_key;
-        while (value_start < yaml.len and yaml[value_start] == ' ') : (value_start += 1) {}
-
-        if (value_start < yaml.len and yaml[value_start] != '\n') {
-            const rest = yaml[value_start..];
-            const line_end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
-            const raw = std.mem.trim(u8, rest[0..line_end], " \t\r");
-            if (raw.len == 0) return null;
-            return parseScalar(raw);
-        }
-
-        var i = value_start;
-        while (i < yaml.len and (yaml[i] == '\n' or yaml[i] == '\r')) i += 1;
-        if (i >= yaml.len) return null;
-
-        const block_start = i;
-        while (i < yaml.len) {
-            if (yaml[i] == '\n') {
-                i += 1;
-                if (i >= yaml.len) break;
-                if (yaml[i] == '\n' or yaml[i] == '\r') break;
-                const line_end = std.mem.indexOfScalar(u8, yaml[i..], '\n') orelse yaml.len - i;
-                const line = yaml[i .. i + line_end];
-                if (line.len == 0) continue;
-                if (line[0] != ' ' and line[0] != '\t' and line[0] != '-') break;
-                var indent: usize = 0;
-                while (indent < line.len and line[indent] == ' ') : (indent += 1) {}
-                if (indent <= parent_indent) break;
-            } else {
-                i += 1;
-            }
-        }
-        return std.mem.trim(u8, yaml[block_start..i], "\n");
-    }
-
-    return null;
+fn needsDecode(scalar: Scalar) bool {
+    return switch (scalar.style) {
+        .plain => false,
+        .single_quoted => std.mem.indexOf(u8, scalar.raw, "''") != null,
+        .double_quoted => std.mem.indexOfScalar(u8, scalar.raw, '\\') != null,
+    };
 }
 
-pub const SectionIterator = struct {
-    yaml: []const u8,
-    pos: usize = 0,
+const Sink = struct {
+    buffer: ?[]u8 = null,
+    expected: ?[]const u8 = null,
+    len: usize = 0,
+    matches: bool = true,
 
-    pub fn next(self: *SectionIterator) ?[]const u8 {
-        if (std.mem.startsWith(u8, self.yaml[self.pos..], "---")) {
-            if (std.mem.indexOfScalar(u8, self.yaml[self.pos..], '\n')) |nl| {
-                self.pos += nl + 1;
-            }
+    fn put(self: *Sink, byte: u8) ScalarError!void {
+        if (self.buffer) |buffer| {
+            if (self.len == buffer.len) return error.BufferTooSmall;
+            buffer[self.len] = byte;
         }
+        if (self.expected) |expected|
+            if (self.len >= expected.len or expected[self.len] != byte) {
+                self.matches = false;
+            };
+        self.len += 1;
+    }
 
-        while (self.pos < self.yaml.len) {
-            while (self.pos < self.yaml.len and (self.yaml[self.pos] == '\n' or self.yaml[self.pos] == '\r')) {
-                self.pos += 1;
-            }
-            if (self.pos >= self.yaml.len) return null;
-
-            const line_end = std.mem.indexOfScalar(u8, self.yaml[self.pos..], '\n') orelse self.yaml.len - self.pos;
-            const line = self.yaml[self.pos .. self.pos + line_end];
-            self.pos += line_end + 1;
-
-            if (line.len == 0 or line[0] == ' ' or line[0] == '-') continue;
-            if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
-                const name = std.mem.trim(u8, line[0..colon], " \t");
-                if (name.len > 0) return name;
-            }
-        }
-        return null;
+    fn codepoint(self: *Sink, cp: u21) ScalarError!void {
+        var bytes: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(cp, &bytes) catch return error.InvalidScalar;
+        for (bytes[0..len]) |byte| try self.put(byte);
     }
 };
 
-pub fn sectionIterator(yaml: []const u8) SectionIterator {
-    return .{ .yaml = yaml };
+fn decode(scalar: Scalar, sink: *Sink) ScalarError!void {
+    const utf8 = std.unicode.utf8ValidateSlice(scalar.raw);
+    var i: usize = 0;
+    while (i < scalar.raw.len) : (i += 1) {
+        const byte = scalar.raw[i];
+        if (scalar.style == .single_quoted and byte == '\'') {
+            if (i + 1 >= scalar.raw.len or scalar.raw[i + 1] != '\'') return error.InvalidScalar;
+            i += 1;
+            try sink.put('\'');
+        } else if (scalar.style == .double_quoted and byte == '\\') {
+            if (i + 1 >= scalar.raw.len) return error.InvalidScalar;
+            i += 1;
+            try sink.put(switch (scalar.raw[i]) {
+                '"' => '"',
+                '\\' => '\\',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                else => return error.UnsupportedEscape,
+            });
+        } else if (utf8 or byte < 0x80) {
+            try sink.put(byte);
+        } else {
+            try sink.codepoint(cp1252(byte));
+        }
+    }
 }
 
-test "get by path" {
-    const yaml =
-        \\---
-        \\WeekendInfo:
-        \\ TrackName: lemans
-        \\ TrackDisplayName: Circuit de la Sarthe
-        \\
-        \\DriverInfo:
-        \\ Drivers:
-        \\ - CarScreenName: Ferrari 499P
-        \\   CarPath: ferrari499p
-    ;
-
-    try std.testing.expectEqualStrings("lemans", getByPath(yaml, "WeekendInfo/TrackName").?);
-    try std.testing.expectEqualStrings("Circuit de la Sarthe", getByPath(yaml, "WeekendInfo/TrackDisplayName").?);
-    try std.testing.expectEqualStrings("Ferrari 499P", getByPath(yaml, "DriverInfo/CarScreenName").?);
+fn cp1252(byte: u8) u21 {
+    if (byte < 0x80 or byte >= 0xa0) return byte;
+    const special = [_]u21{
+        0x20ac, 0xfffd, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+        0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0xfffd, 0x017d, 0xfffd,
+        0xfffd, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+        0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0xfffd, 0x017e, 0x0178,
+    };
+    return special[byte - 0x80];
 }
 
-test "get by nested path" {
-    const yaml =
-        \\---
-        \\WeekendInfo:
-        \\ Track:
-        \\  City: Le Mans
-        \\  Country: France
-    ;
-
-    try std.testing.expectEqualStrings("Le Mans", getByPath(yaml, "WeekendInfo/Track/City").?);
-    try std.testing.expectEqualStrings("France", getByPath(yaml, "WeekendInfo/Track/Country").?);
+test "nested keys scalar decoding and ownership" {
+    var source = "Info:\n Track: Spa\n Int: -7\n Float: 1.25e3\n Yes: TRUE\n Empty:\n".*;
+    var snapshot = try parse(std.testing.allocator, &source, 9);
+    defer snapshot.deinit();
+    @memset(&source, 'x');
+    var buffer: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("Spa", try (try snapshot.query(&.{ .{ .key = "Info" }, .{ .key = "Track" } })).?.string(&buffer));
+    try std.testing.expectEqual(@as(i64, -7), try (try snapshot.query(&.{ .{ .key = "Info" }, .{ .key = "Int" } })).?.asInt());
+    try std.testing.expectEqual(@as(f64, 1250), try (try snapshot.query(&.{ .{ .key = "Info" }, .{ .key = "Float" } })).?.asFloat());
+    try std.testing.expect(try (try snapshot.query(&.{ .{ .key = "Info" }, .{ .key = "Yes" } })).?.asBool());
+    try std.testing.expect((try snapshot.query(&.{ .{ .key = "Info" }, .{ .key = "Empty" } })).?.isNull());
+    try std.testing.expectEqual(@as(i32, 9), snapshot.version);
 }
 
-test "extract key handles quoted values with spaces" {
+test "same-indent lists support index and typed selection" {
     const yaml =
-        \\---
-        \\WeekendInfo:
-        \\ TrackDisplayName: "Circuit de la Sarthe"
-    ;
-
-    try std.testing.expectEqualStrings(
-        "Circuit de la Sarthe",
-        getByPath(yaml, "WeekendInfo/TrackDisplayName").?,
-    );
-}
-
-test "list item matching selects the correct driver by CarIdx" {
-    const yaml =
-        \\---
         \\DriverInfo:
         \\ DriverCarIdx: 1
         \\ Drivers:
         \\ - CarIdx: 0
         \\   UserName: Alice
-        \\   CarScreenName: Ferrari 499P
         \\ - CarIdx: 1
         \\   UserName: Bob
-        \\   CarScreenName: Porsche 963
-        \\ - CarIdx: 2
-        \\   UserName: Carol
-        \\   CarScreenName: BMW M Hybrid V8
     ;
-
-    const section = extractSection(yaml, "DriverInfo").?;
-    const item = listItemMatching(section, "Drivers", "CarIdx", "1").?;
-    try std.testing.expectEqualStrings("Bob", extractKey(item, "UserName").?);
-    try std.testing.expectEqualStrings("Porsche 963", extractKey(item, "CarScreenName").?);
-
-    const first = listItemMatching(section, "Drivers", "CarIdx", "0").?;
-    try std.testing.expectEqualStrings("Ferrari 499P", extractKey(first, "CarScreenName").?);
-
-    const last = listItemMatching(section, "Drivers", "CarIdx", "2").?;
-    try std.testing.expectEqualStrings("Carol", extractKey(last, "UserName").?);
-
-    try std.testing.expect(listItemMatching(section, "Drivers", "CarIdx", "9") == null);
+    var snapshot = try parse(std.testing.allocator, yaml, 1);
+    defer snapshot.deinit();
+    var buffer: [16]u8 = undefined;
+    const indexed = (try snapshot.query(&.{ .{ .key = "DriverInfo" }, .{ .key = "Drivers" }, .{ .index = 0 }, .{ .key = "UserName" } })).?;
+    try std.testing.expectEqualStrings("Alice", try indexed.string(&buffer));
+    const selected = (try snapshot.query(&.{
+        .{ .key = "DriverInfo" },
+        .{ .key = "Drivers" },
+        .{ .select = .{ .key = "CarIdx", .value = .{ .int = 1 } } },
+        .{ .key = "UserName" },
+    })).?;
+    try std.testing.expectEqualStrings("Bob", try selected.string(&buffer));
 }
 
-test "extract section returns null for missing section" {
-    const yaml =
-        \\---
-        \\WeekendInfo:
-        \\ TrackName: lemans
-    ;
-
-    try std.testing.expect(extractSection(yaml, "DriverInfo") == null);
+test "quoted strings unescape and CP1252 falls back to UTF-8" {
+    const yaml = "---\r\nText:\r\n Double: \"line\\n\\\"ok\\\"\"\r\n Single: 'driver''s'\r\n Legacy: Montr\xe9al \x96 GP\r\n...\r\n";
+    var snapshot = try parse(std.testing.allocator, yaml, 1);
+    defer snapshot.deinit();
+    var buffer: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("line\n\"ok\"", try (try snapshot.query(&.{ .{ .key = "Text" }, .{ .key = "Double" } })).?.string(&buffer));
+    try std.testing.expectEqualStrings("driver's", try (try snapshot.query(&.{ .{ .key = "Text" }, .{ .key = "Single" } })).?.string(&buffer));
+    try std.testing.expectEqualStrings("Montréal – GP", try (try snapshot.query(&.{ .{ .key = "Text" }, .{ .key = "Legacy" } })).?.string(&buffer));
 }
 
-test "section iterator yields top-level sections" {
-    const yaml =
-        \\---
-        \\WeekendInfo:
-        \\ TrackName: lemans
-        \\
-        \\DriverInfo:
-        \\ DriverCarIdx: 0
-    ;
-
-    var it = sectionIterator(yaml);
-    try std.testing.expectEqualStrings("WeekendInfo", it.next().?);
-    try std.testing.expectEqualStrings("DriverInfo", it.next().?);
-    try std.testing.expect(it.next() == null);
+test "missing paths and wrong container types" {
+    var snapshot = try parse(std.testing.allocator, "Root:\n Value: one\n", 1);
+    defer snapshot.deinit();
+    try std.testing.expect((try snapshot.query(&.{.{ .key = "Missing" }})) == null);
+    try std.testing.expectError(error.TypeMismatch, snapshot.query(&.{ .{ .key = "Root" }, .{ .key = "Value" }, .{ .key = "Bad" } }));
 }

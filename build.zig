@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+    if (target.result.os.tag == .windows) mod.linkSystemLibrary("user32", .{});
 
     const example_common = b.addModule("example_common", .{
         .root_source_file = b.path("examples/common/root.zig"),

@@ -1,38 +1,31 @@
-//! Commonly used IRSDK session paths and telemetry variable names.
+//! Commonly used IRSDK session map keys and telemetry variable names.
 //!
 //! These are optional conveniences — all session fields and telemetry variables
-//! remain accessible by path or name via the client API.
-//!
-//! Session paths use `Section/Key` or `Section/Nested/.../Key`. Keys inside YAML
-//! lists (e.g. `DriverInfo/CarScreenName`) match the first occurrence in the section.
+//! remain discoverable from parsed snapshots.
 
-/// Session-info YAML paths (`Section/Key`, slash-separated).
+/// Keys in the parsed session-info tree.
 pub const session = struct {
-    pub const track_name = "WeekendInfo/TrackName";
-    pub const track_display_name = "WeekendInfo/TrackDisplayName";
-    pub const track_config_name = "WeekendInfo/TrackConfigName";
-    pub const track_length = "WeekendInfo/TrackLength";
-    pub const track_length_official = "WeekendInfo/TrackLengthOfficial";
-    pub const session_type = "WeekendInfo/SessionType";
-    pub const race_week = "WeekendInfo/RaceWeek";
+    pub const weekend_info = "WeekendInfo";
+    pub const driver_info = "DriverInfo";
+    pub const session_info = "SessionInfo";
+    pub const drivers = "Drivers";
 
-    pub const driver_car_idx = "DriverInfo/DriverCarIdx";
-    pub const driver_user_name = "DriverInfo/DriverUserName";
-    /// First `CarScreenName` found in the DriverInfo section.
-    ///
-    /// In multi-car sessions this is the *first* driver, not necessarily the player.
-    /// Prefer `Client.playerDriverGet(keys.driver.car_screen_name)` for the player's car.
-    pub const car_screen_name = "DriverInfo/CarScreenName";
-    pub const car_path = "DriverInfo/CarPath";
-    pub const car_class_id = "DriverInfo/CarClassID";
+    pub const track_name = "TrackName";
+    pub const track_display_name = "TrackDisplayName";
+    pub const track_config_name = "TrackConfigName";
+    pub const track_length = "TrackLength";
+    pub const track_length_official = "TrackLengthOfficial";
+    pub const session_type = "SessionType";
+    pub const race_week = "RaceWeek";
 
-    pub const session_laps = "SessionInfo/SessionLaps";
-    pub const session_time = "SessionInfo/SessionTime";
+    pub const driver_car_idx = "DriverCarIdx";
+    pub const driver_user_name = "DriverUserName";
+    pub const session_laps = "SessionLaps";
+    pub const session_time = "SessionTime";
 };
 
 /// Leaf keys inside a `DriverInfo/Drivers` list item.
 ///
-/// Use with `Client.playerDriverGet`, which resolves the player's entry via `DriverCarIdx`.
 pub const driver = struct {
     pub const car_idx = "CarIdx";
     pub const user_name = "UserName";

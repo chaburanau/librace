@@ -1,12 +1,15 @@
-//! iRacing SDK client: shared-memory connection, variable lookup, and polling.
+//! Lean iRacing SDK client with lazy session and variable metadata parsing.
 
 const std = @import("std");
 const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
 const session_mod = @import("session.zig");
-const catalog_mod = @import("catalog.zig");
-const keys = @import("keys.zig");
 const testing = @import("testing.zig");
+const readSharedI32 = protocol.readSharedI32;
+
+pub const SessionSnapshot = session_mod.Snapshot;
+pub const SessionParseError = session_mod.ParseError;
+pub const VariableType = protocol.VarType;
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidHeader,
@@ -15,542 +18,561 @@ pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     Canceled,
 };
 
-/// Failure modes for type-coercing scalar reads.
-pub const CoerceError = error{TypeMismatch};
-
-/// Failure modes for reading a scalar telemetry variable by name.
-pub const GetError = error{
-    /// No variable with that name in the current catalog.
-    NotFound,
-    /// The variable exists but is an array — use `getRaw`.
-    IsArray,
-    /// The variable's type does not match the requested type.
-    TypeMismatch,
-};
-
-/// Failure modes for reading via a cached [`VarHandle`].
-pub const ReadError = error{
-    /// The catalog was rebuilt since the handle was resolved — re-`resolve` it.
-    Stale,
-    /// The variable is an array — use `readRaw`.
-    IsArray,
-    /// The variable's type does not match the requested type.
-    TypeMismatch,
-};
-
-/// Result of a single [`Client.poll`].
 pub const PollStatus = enum {
-    /// A fresh telemetry row was copied.
-    ok,
-    /// The simulator is not currently connected.
+    updated,
+    unchanged,
     disconnected,
-    /// Connected, but no valid telemetry row could be read this tick.
     stale,
-    /// The session changed and the catalog could not be rebuilt (e.g. allocation failure).
     rebuild_failed,
 
     pub fn isOk(self: PollStatus) bool {
-        return self == .ok;
+        return self == .updated or self == .unchanged;
     }
 };
 
-pub const VarValue = union(enum) {
+pub const HeaderStatus = struct {
+    raw: i32,
+
+    pub fn isConnected(self: HeaderStatus) bool {
+        return self.raw & protocol.status_connected != 0;
+    }
+};
+
+pub const VariableDescriptor = struct {
+    native_index: usize,
+    var_type: VariableType,
+    offset: usize,
+    count: usize,
+    count_as_time: bool,
+    name_buffer: [protocol.max_string]u8,
+    name_len: u8,
+    description_buffer: [protocol.max_desc]u8,
+    description_len: u8,
+    unit_buffer: [protocol.max_string]u8,
+    unit_len: u8,
+
+    pub fn name(self: *const VariableDescriptor) []const u8 {
+        return self.name_buffer[0..self.name_len];
+    }
+
+    pub fn description(self: *const VariableDescriptor) []const u8 {
+        return self.description_buffer[0..self.description_len];
+    }
+
+    pub fn unit(self: *const VariableDescriptor) []const u8 {
+        return self.unit_buffer[0..self.unit_len];
+    }
+};
+
+/// Allocation-free metadata cached by the caller for repeated row reads.
+pub const Variable = struct {
+    native_index: usize,
+    catalog_generation: u64,
+    var_type: VariableType,
+    count: usize,
+    start: usize,
+    end: usize,
+};
+
+pub const VariableArrayView = struct {
+    var_type: VariableType,
+    count: usize,
+    bytes: []const u8,
+
+    pub fn value(self: VariableArrayView, index: usize) ?VariableValue {
+        if (index >= self.count) return null;
+        const size = variableByteSize(self.var_type) orelse return null;
+        const start = std.math.mul(usize, index, size) catch return null;
+        return decodeScalar(self.var_type, self.bytes[start..][0..size]);
+    }
+};
+
+pub const VariableValue = union(enum) {
     int: i32,
     float: f32,
     double: f64,
     bool: bool,
     char: u8,
     bit_field: u32,
+    array: VariableArrayView,
 
-    /// Coerce a decoded scalar to `T`. Returns `error.TypeMismatch` when the tag does not match.
-    pub fn coerce(self: VarValue, comptime T: type) CoerceError!T {
-        return switch (T) {
-            i32 => switch (self) {
-                .int => |v| v,
-                else => error.TypeMismatch,
-            },
-            u32 => switch (self) {
-                .bit_field => |v| v,
-                .int => |v| @intCast(v),
-                else => error.TypeMismatch,
-            },
-            f32 => switch (self) {
-                .float => |v| v,
-                .double => |v| @floatCast(v),
-                else => error.TypeMismatch,
-            },
-            f64 => switch (self) {
-                .float => |v| @floatCast(v),
-                .double => |v| v,
-                else => error.TypeMismatch,
-            },
-            bool => switch (self) {
-                .bool => |v| v,
-                else => error.TypeMismatch,
-            },
-            u8 => switch (self) {
-                .char => |v| v,
-                else => error.TypeMismatch,
-            },
-            else => @compileError("unsupported coerce target type: " ++ @typeName(T)),
-        };
-    }
-
-    /// Lenient numeric view of any scalar (int/bitfield/bool/char/float/double) as `f64`.
-    pub fn toNumber(self: VarValue) f64 {
+    pub fn asInt(self: VariableValue) ?i32 {
         return switch (self) {
-            .int => |v| @floatFromInt(v),
-            .bit_field => |v| @floatFromInt(v),
-            .char => |v| @floatFromInt(v),
-            .bool => |v| if (v) 1 else 0,
-            .float => |v| v,
-            .double => |v| v,
+            .int => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asFloat(self: VariableValue) ?f64 {
+        return switch (self) {
+            .float => |value| value,
+            .double => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asBool(self: VariableValue) ?bool {
+        return switch (self) {
+            .bool => |value| value,
+            else => null,
         };
     }
 };
 
-/// Raw bytes for a telemetry variable (including arrays). Valid until the next `poll`.
-pub const VarRaw = struct {
-    var_type: protocol.VarType,
-    count: i32,
-    data: []const u8,
+pub const VariableError = error{
+    IndexOutOfBounds,
+    NotFound,
+    InvalidData,
+    Stale,
+    LayoutChanged,
 };
 
-/// Metadata for one entry in the per-session telemetry variable catalog.
-pub const VarDescriptor = struct {
-    name: []const u8,
-    description: []const u8,
-    unit: []const u8,
-    var_type: protocol.VarType,
-    count: i32,
-    offset: i32,
-};
+const Catalog = struct {
+    num_vars: i32,
+    var_header_offset: i32,
+    buf_len: i32,
 
-/// Stable reference to a telemetry variable, resolved once and read many times.
-///
-/// A handle skips the per-read name lookup. It is invalidated when the session catalog is
-/// rebuilt; reads then return `error.Stale` and the handle should be re-`resolve`d.
-pub const VarHandle = struct {
-    index: usize,
-    version: u64,
-    var_type: protocol.VarType,
-    count: i32,
+    fn eql(a: Catalog, b: Catalog) bool {
+        return a.num_vars == b.num_vars and
+            a.var_header_offset == b.var_header_offset and
+            a.buf_len == b.buf_len;
+    }
 };
-
-pub const VarNameIterator = catalog_mod.Catalog.NameIterator;
-pub const SessionSectionIterator = session_mod.SectionIterator;
 
 pub const Client = struct {
     mem: core.transport.mmap.SharedMemory,
     allocator: std.mem.Allocator,
-    catalog: catalog_mod.Catalog,
     row_buffer: []u8,
-    /// pyirsdk connection fallback: 0 = use status bit, 1 = probe SessionNum once, 2 = latched connected.
-    connection_fallback_phase: u8 = 0,
-    /// Optional handle to `Local\\IRSDKDataValidEvent`; null when unavailable.
+    scratch_buffer: []u8,
+    catalog: Catalog,
+    catalog_generation: u64 = 1,
+    last_tick: ?i32 = null,
+    connected: bool = false,
     data_valid_event: ?core.transport.mmap.NamedEvent = null,
-    /// Cache of session-info lookups, invalidated when `session_info_update` changes.
-    session_cache: std.StringHashMapUnmanaged(?[]const u8) = .empty,
-    session_cache_update: i32 = std.math.minInt(i32),
+    data_valid_event_attempted: bool = false,
+    io: ?std.Io = null,
+    stale_timeout: ?std.Io.Duration = null,
+    stale_deadline: ?std.Io.Clock.Timestamp = null,
+    owns_buffers: bool = true,
 
     pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
-        var mem = try core.transport.mmap.SharedMemory.open(.{
-            .name = protocol.mem_map_name,
-        });
+        var mem = try core.transport.mmap.SharedMemory.open(.{ .name = protocol.mem_map_name });
         errdefer mem.close();
 
         const hdr = protocol.readHeader(mem.view) orelse return error.InvalidHeader;
-        if (hdr.buf_len <= 0) return error.InvalidHeader;
-
-        const row_buffer = try allocator.alloc(u8, @intCast(hdr.buf_len));
+        const catalog = readCatalog(hdr) orelse return error.InvalidHeader;
+        const row_buffer = try allocator.alloc(u8, @intCast(catalog.buf_len));
         errdefer allocator.free(row_buffer);
-
-        var catalog = catalog_mod.Catalog.init(allocator);
-        errdefer catalog.deinit();
-        try catalog.rebuild(mem.view, hdr);
+        const scratch_buffer = try allocator.alloc(u8, @intCast(catalog.buf_len));
+        errdefer allocator.free(scratch_buffer);
 
         var client = Client{
             .mem = mem,
             .allocator = allocator,
-            .catalog = catalog,
             .row_buffer = row_buffer,
-            .data_valid_event = core.transport.mmap.NamedEvent.open(.{ .name = protocol.data_valid_event_name }) catch null,
+            .scratch_buffer = scratch_buffer,
+            .catalog = catalog,
         };
-        _ = client.copyLatestRow();
+        const source = protocol.latestRowSource(client.mem.view, hdr);
+        const copied = if (source) |row|
+            protocol.copyRow(client.mem.view, hdr, row, client.row_buffer)
+        else
+            false;
+        if (copied) client.last_tick = source.?.tick_count;
+        client.connected = copied and hdr.isConnected();
         return client;
     }
 
     pub fn deinit(self: *Client) void {
-        self.clearSessionCache();
-        self.session_cache.deinit(self.allocator);
-        if (self.data_valid_event) |*ev| ev.close();
-        self.catalog.deinit();
-        self.allocator.free(self.row_buffer);
+        if (self.data_valid_event) |*event| event.close();
+        if (self.owns_buffers) {
+            self.allocator.free(self.row_buffer);
+            self.allocator.free(self.scratch_buffer);
+        }
         self.mem.close();
+        self.* = undefined;
     }
 
-    pub fn header(self: *const Client) ?*const protocol.Header {
-        return protocol.readHeader(self.mem.view);
+    pub fn isConnected(self: *const Client) bool {
+        return self.connected;
     }
 
-    pub fn isConnected(self: *Client) bool {
-        const hdr = self.header() orelse return false;
-        if (hdr.isConnected()) {
-            self.connection_fallback_phase = 0;
-            return true;
-        }
-        // pyirsdk workaround: status bit clears briefly while vars remain valid.
-        if (self.connection_fallback_phase == 0) self.connection_fallback_phase = 1;
-        if (self.connection_fallback_phase == 1) {
-            if (self.getRaw(keys.var_name.session_num)) |raw| {
-                if (raw.count == 1) {
-                    if (decodeScalar(raw.var_type, raw.data)) |v| {
-                        if (v == .int and v.int != 0) self.connection_fallback_phase = 2;
-                    }
-                }
-            }
-        }
-        return self.connection_fallback_phase == 2;
+    pub fn configureLiveness(
+        self: *Client,
+        io: std.Io,
+        stale_timeout: ?std.Io.Duration,
+    ) void {
+        self.io = io;
+        self.stale_timeout = stale_timeout;
+        self.refreshStaleDeadline();
     }
 
-    /// Copy the latest telemetry row from shared memory and refresh the catalog when the sim
-    /// updates session info. The returned [`PollStatus`] distinguishes the failure modes.
+    pub fn header(self: *const Client) HeaderView {
+        return .{ .client = self };
+    }
+
+    pub fn session(self: *const Client) SessionView {
+        return .{ .client = self };
+    }
+
+    pub fn variables(self: *Client) VariablesView {
+        return .{ .client = self };
+    }
+
     pub fn poll(self: *Client) PollStatus {
-        if (!self.refreshCatalogIfNeeded()) return .rebuild_failed;
-        if (!self.isConnected()) return .disconnected;
-        if (!self.copyLatestRow()) return .stale;
-        return .ok;
+        const was_connected = self.connected;
+        const hdr = protocol.readHeader(self.mem.view) orelse {
+            self.connected = false;
+            return .rebuild_failed;
+        };
+        if (!hdr.isConnected()) {
+            self.connected = false;
+            return .disconnected;
+        }
+        self.connected = true;
+
+        const current_catalog = readCatalog(hdr) orelse return .rebuild_failed;
+
+        const source = protocol.latestRowSource(self.mem.view, hdr) orelse return .stale;
+        const catalog_changed = !Catalog.eql(current_catalog, self.catalog);
+        const resized = current_catalog.buf_len != self.catalog.buf_len;
+        const tick_changed = self.last_tick == null or source.tick_count != self.last_tick.?;
+        const tick_rolled_back = if (self.last_tick) |last| source.tick_count < last else false;
+        const reconnected = !was_connected;
+
+        // A stable tick and stable catalog need no row copy.
+        if (!catalog_changed and !tick_changed and !reconnected) {
+            if (self.staleDeadlineReached()) {
+                self.connected = false;
+                return .stale;
+            }
+            return .unchanged;
+        }
+
+        if (resized) {
+            const replacement_row = self.allocator.alloc(u8, @intCast(current_catalog.buf_len)) catch
+                return .rebuild_failed;
+            const replacement_scratch = self.allocator.alloc(u8, @intCast(current_catalog.buf_len)) catch {
+                self.allocator.free(replacement_row);
+                return .rebuild_failed;
+            };
+            if (!protocol.copyRow(self.mem.view, hdr, source, replacement_row)) {
+                self.allocator.free(replacement_row);
+                self.allocator.free(replacement_scratch);
+                return .stale;
+            }
+            const after = readCatalog(hdr) orelse {
+                self.allocator.free(replacement_row);
+                self.allocator.free(replacement_scratch);
+                return .rebuild_failed;
+            };
+            if (!Catalog.eql(after, current_catalog)) {
+                self.allocator.free(replacement_row);
+                self.allocator.free(replacement_scratch);
+                return .stale;
+            }
+            if (!hdr.isConnected()) {
+                self.allocator.free(replacement_row);
+                self.allocator.free(replacement_scratch);
+                self.connected = false;
+                return .disconnected;
+            }
+            if (self.owns_buffers) {
+                self.allocator.free(self.row_buffer);
+                self.allocator.free(self.scratch_buffer);
+            }
+            self.row_buffer = replacement_row;
+            self.scratch_buffer = replacement_scratch;
+            self.owns_buffers = true;
+            self.catalog = current_catalog;
+            self.catalog_generation +%= 1;
+            self.last_tick = source.tick_count;
+            self.refreshStaleDeadline();
+            return .updated;
+        }
+
+        if (!protocol.copyRow(self.mem.view, hdr, source, self.scratch_buffer)) return .stale;
+        const after = readCatalog(hdr) orelse return .rebuild_failed;
+        if (!Catalog.eql(after, current_catalog)) return .stale;
+        if (!hdr.isConnected()) {
+            self.connected = false;
+            return .disconnected;
+        }
+        std.mem.swap([]u8, &self.row_buffer, &self.scratch_buffer);
+        if (catalog_changed) {
+            self.catalog = current_catalog;
+        }
+        if (catalog_changed or tick_rolled_back or reconnected) self.catalog_generation +%= 1;
+        self.last_tick = source.tick_count;
+        self.refreshStaleDeadline();
+        return .updated;
     }
 
-    /// Block up to `timeout` for the sim's data-valid event, then `poll`.
-    ///
-    /// Falls back to a plain `poll` when the event is unavailable.
     pub fn waitAndPoll(self: *Client, timeout: std.Io.Duration) PollStatus {
-        if (self.data_valid_event) |*ev| _ = ev.wait(timeout);
+        const before_wait = self.poll();
+        if (before_wait != .unchanged) return before_wait;
+
+        if (!self.data_valid_event_attempted) {
+            self.data_valid_event_attempted = true;
+            self.data_valid_event = core.transport.mmap.NamedEvent.open(.{
+                .name = protocol.data_valid_event_name,
+            }) catch null;
+        }
+        if (self.data_valid_event) |*event| {
+            _ = event.wait(timeout);
+        } else if (self.io) |io| {
+            std.Io.sleep(io, timeout, .awake) catch {};
+        }
         return self.poll();
     }
 
-    /// Number of telemetry variables in the current session catalog.
-    pub fn varCount(self: *const Client) usize {
-        const hdr = self.header() orelse return 0;
-        return @intCast(hdr.num_vars);
-    }
-
-    pub fn hasVar(self: *const Client, name: []const u8) bool {
-        return self.catalog.get(name) != null;
-    }
-
-    /// Metadata for variable at `index` in the IRSDK catalog (0 .. `varCount()`).
-    pub fn varDescriptor(self: *const Client, index: usize) ?VarDescriptor {
-        const entry = self.catalog.entryAtIrSdkIndex(index) orelse return null;
-        return descriptorFromEntry(entry);
-    }
-
-    pub fn varNameIterator(self: *const Client) VarNameIterator {
-        return self.catalog.nameIterator();
-    }
-
-    /// Read a scalar telemetry variable by IRSDK name, distinguishing missing vs array.
-    pub fn getValue(self: *const Client, name: []const u8) GetError!VarValue {
-        const entry = self.catalog.get(name) orelse return error.NotFound;
-        const raw = self.rawFromEntry(entry) orelse return error.NotFound;
-        if (raw.count != 1) return error.IsArray;
-        return decodeScalar(raw.var_type, raw.data) orelse error.IsArray;
-    }
-
-    /// Read a scalar telemetry variable by IRSDK name. Returns null for arrays or unknown names.
-    pub fn get(self: *const Client, name: []const u8) ?VarValue {
-        return self.getValue(name) catch null;
-    }
-
-    /// Read a scalar telemetry variable and coerce it to `T`.
-    ///
-    /// Returns `error.NotFound` when the name is missing, `error.IsArray` when it is an array,
-    /// and `error.TypeMismatch` when the variable's type does not match `T`.
-    pub fn getAs(self: *const Client, comptime T: type, name: []const u8) GetError!T {
-        const value = try self.getValue(name);
-        return value.coerce(T);
-    }
-
-    /// Read any scalar as `f64` (lenient numeric coercion). Null only when missing or an array.
-    pub fn getNumber(self: *const Client, name: []const u8) ?f64 {
-        const value = self.getValue(name) catch return null;
-        return value.toNumber();
-    }
-
-    /// Read raw telemetry bytes by IRSDK name (scalars and arrays). Valid until next `poll`.
-    pub fn getRaw(self: *const Client, name: []const u8) ?VarRaw {
-        const entry = self.catalog.get(name) orelse return null;
-        return self.rawFromEntry(entry);
-    }
-
-    /// Resolve a name into a [`VarHandle`] for repeated fast reads. Null when unknown.
-    pub fn resolve(self: *const Client, name: []const u8) ?VarHandle {
-        const index = self.catalog.getIndex(name) orelse return null;
-        const entry = self.catalog.entryAt(index) orelse return null;
-        return .{
-            .index = index,
-            .version = self.catalog.version,
-            .var_type = entry.var_type,
-            .count = entry.count,
+    fn refreshStaleDeadline(self: *Client) void {
+        const io = self.io orelse return;
+        const timeout = self.stale_timeout orelse {
+            self.stale_deadline = null;
+            return;
         };
-    }
-
-    /// Read and coerce a scalar via a previously resolved handle.
-    pub fn read(self: *const Client, comptime T: type, handle: VarHandle) ReadError!T {
-        const value = try self.readScalar(handle);
-        return value.coerce(T);
-    }
-
-    /// Read any scalar via a handle as `f64`. Null when the variable is an array.
-    pub fn readNumber(self: *const Client, handle: VarHandle) error{Stale}!?f64 {
-        if (handle.version != self.catalog.version) return error.Stale;
-        const entry = self.catalog.entryAt(handle.index) orelse return error.Stale;
-        const raw = self.rawFromEntry(entry) orelse return error.Stale;
-        if (raw.count != 1) return null;
-        const value = decodeScalar(raw.var_type, raw.data) orelse return null;
-        return value.toNumber();
-    }
-
-    /// Read raw bytes via a handle (scalars and arrays). Valid until next `poll`.
-    pub fn readRaw(self: *const Client, handle: VarHandle) error{Stale}!VarRaw {
-        if (handle.version != self.catalog.version) return error.Stale;
-        const entry = self.catalog.entryAt(handle.index) orelse return error.Stale;
-        return self.rawFromEntry(entry) orelse error.Stale;
-    }
-
-    fn readScalar(self: *const Client, handle: VarHandle) ReadError!VarValue {
-        if (handle.version != self.catalog.version) return error.Stale;
-        const entry = self.catalog.entryAt(handle.index) orelse return error.Stale;
-        const raw = self.rawFromEntry(entry) orelse return error.Stale;
-        if (raw.count != 1) return error.IsArray;
-        return decodeScalar(raw.var_type, raw.data) orelse error.IsArray;
-    }
-
-    /// Bind a caller-defined struct of named telemetry fields for ergonomic per-frame reads.
-    ///
-    /// `T`'s field names must match IRSDK variable names exactly (e.g. `Speed`, `Gear`, `RPM`),
-    /// each field an integer, float, or bool with a default value. See [`Binding`].
-    pub fn bind(self: *Client, comptime T: type) Binding(T) {
-        return Binding(T).init(self);
-    }
-
-    /// Session-info YAML document (borrowed from shared memory; refreshed when the sim updates it).
-    pub fn sessionYaml(self: *const Client) ?[]const u8 {
-        const hdr = self.header() orelse return null;
-        const yaml = hdr.sessionInfo(self.mem.view) orelse return null;
-        return std.mem.trimEnd(u8, yaml, "\x00");
-    }
-
-    /// Read a session-info value by slash-separated path (`WeekendInfo/TrackName`).
-    ///
-    /// Results are cached until the session-info document changes. Paths are `Section/Key` or
-    /// `Section/Nested/.../Key`; keys inside lists match the first occurrence (see `keys.session`).
-    pub fn sessionGet(self: *Client, path: []const u8) ?[]const u8 {
-        const hdr = self.header() orelse return null;
-        self.syncSessionCache(hdr.session_info_update);
-        if (self.session_cache.get(path)) |cached| return cached;
-
-        const value = if (self.sessionYaml()) |yaml| session_mod.getByPath(yaml, path) else null;
-        self.cacheSessionValue(path, value);
-        return value;
-    }
-
-    /// Read a field from the *player's* `DriverInfo/Drivers` entry, resolved via `DriverCarIdx`.
-    ///
-    /// Pass a leaf key from `keys.driver` (e.g. `keys.driver.car_screen_name`). This is the
-    /// correct way to get the player's car/name in multi-car sessions.
-    pub fn playerDriverGet(self: *Client, leaf_key: []const u8) ?[]const u8 {
-        const hdr = self.header() orelse return null;
-        self.syncSessionCache(hdr.session_info_update);
-
-        var key_buf: [96]u8 = undefined;
-        const cache_key = std.fmt.bufPrint(&key_buf, "\x00drv/{s}", .{leaf_key}) catch
-            return self.computePlayerDriverGet(leaf_key);
-        if (self.session_cache.get(cache_key)) |cached| return cached;
-
-        const value = self.computePlayerDriverGet(leaf_key);
-        self.cacheSessionValue(cache_key, value);
-        return value;
-    }
-
-    fn computePlayerDriverGet(self: *const Client, leaf_key: []const u8) ?[]const u8 {
-        const yaml = self.sessionYaml() orelse return null;
-        const idx = session_mod.getByPath(yaml, keys.session.driver_car_idx) orelse return null;
-        const section = session_mod.extractSection(yaml, "DriverInfo") orelse return null;
-        const item = session_mod.listItemMatching(section, "Drivers", keys.driver.car_idx, idx) orelse return null;
-        return session_mod.extractKey(item, leaf_key);
-    }
-
-    /// Extract a top-level session-info section as raw YAML text.
-    pub fn sessionSection(self: *const Client, section: []const u8) ?[]const u8 {
-        const yaml = self.sessionYaml() orelse return null;
-        return session_mod.extractSection(yaml, section);
-    }
-
-    pub fn sessionSectionIterator(self: *const Client) ?SessionSectionIterator {
-        const yaml = self.sessionYaml() orelse return null;
-        return session_mod.sectionIterator(yaml);
-    }
-
-    /// Monotonic counter; changes when session-info YAML is updated by the sim.
-    pub fn sessionInfoUpdate(self: *const Client) ?i32 {
-        const hdr = self.header() orelse return null;
-        return hdr.session_info_update;
-    }
-
-    fn rawFromEntry(self: *const Client, entry: *const catalog_mod.VarEntry) ?VarRaw {
-        const base: usize = @intCast(entry.offset);
-        const elem_size = entry.var_type.byteSize();
-        const total: usize = @as(usize, @intCast(entry.count)) * elem_size;
-        if (base + total > self.row_buffer.len) return null;
-        return .{
-            .var_type = entry.var_type,
-            .count = entry.count,
-            .data = self.row_buffer[base..][0..total],
-        };
-    }
-
-    fn syncSessionCache(self: *Client, update: i32) void {
-        if (self.session_cache_update == update) return;
-        self.clearSessionCache();
-        self.session_cache_update = update;
-    }
-
-    fn cacheSessionValue(self: *Client, key: []const u8, value: ?[]const u8) void {
-        const owned_key = self.allocator.dupe(u8, key) catch return;
-        self.session_cache.put(self.allocator, owned_key, value) catch {
-            self.allocator.free(owned_key);
-        };
-    }
-
-    fn clearSessionCache(self: *Client) void {
-        var it = self.session_cache.keyIterator();
-        while (it.next()) |k| self.allocator.free(k.*);
-        self.session_cache.clearRetainingCapacity();
-    }
-
-    fn refreshCatalogIfNeeded(self: *Client) bool {
-        const hdr = self.header() orelse return false;
-        if (!self.catalog.needsRebuild(hdr)) return true;
-
-        self.catalog.rebuild(self.mem.view, hdr) catch return false;
-
-        const buf_len: usize = @intCast(hdr.buf_len);
-        if (buf_len != self.row_buffer.len) {
-            const new_buffer = self.allocator.alloc(u8, buf_len) catch return false;
-            self.allocator.free(self.row_buffer);
-            self.row_buffer = new_buffer;
+        if (timeout.nanoseconds < 0) {
+            self.stale_deadline = null;
+            return;
         }
-        return true;
+        self.stale_deadline = std.Io.Clock.Timestamp.fromNow(io, .{
+            .raw = timeout,
+            .clock = .awake,
+        });
     }
 
-    fn copyLatestRow(self: *Client) bool {
-        const hdr = self.header() orelse return false;
-        return protocol.copyLatestRow(self.mem.view, hdr, self.row_buffer);
+    fn staleDeadlineReached(self: *const Client) bool {
+        const io = self.io orelse return false;
+        const deadline = self.stale_deadline orelse return false;
+        return deadline.durationFromNow(io).raw.nanoseconds <= 0;
     }
 };
 
-fn descriptorFromEntry(entry: *const catalog_mod.VarEntry) VarDescriptor {
-    return .{
-        .name = entry.name,
-        .description = entry.description,
-        .unit = entry.unit,
-        .var_type = entry.var_type,
-        .count = entry.count,
-        .offset = entry.offset,
-    };
-}
+pub const HeaderView = struct {
+    client: *const Client,
 
-/// A live, typed view over a fixed set of telemetry variables.
-///
-/// Built via [`Client.bind`]. Each `update` resolves any missing/stale handles, then fills
-/// `values`. Fields that are missing this frame keep their previous value; query `isPresent`
-/// to tell whether a field was populated.
-pub fn Binding(comptime T: type) type {
-    const info = @typeInfo(T);
-    if (info != .@"struct") @compileError("Binding requires a struct type, got " ++ @typeName(T));
-    const fields = info.@"struct".fields;
-
-    inline for (fields) |f| {
-        if (!isNumericField(f.type)) {
-            @compileError("Binding field '" ++ f.name ++ "' must be an integer, float, or bool");
-        }
+    pub fn version(self: HeaderView) ?i32 {
+        const hdr = self.raw() orelse return null;
+        return readSharedI32(&hdr.ver);
     }
 
-    return struct {
-        const Self = @This();
+    pub fn status(self: HeaderView) ?HeaderStatus {
+        const hdr = self.raw() orelse return null;
+        return .{ .raw = readSharedI32(&hdr.status) };
+    }
 
-        client: *Client,
-        values: T,
-        handles: [fields.len]?VarHandle,
-        present: [fields.len]bool,
+    pub fn tickRate(self: HeaderView) ?i32 {
+        const hdr = self.raw() orelse return null;
+        return readSharedI32(&hdr.tick_rate);
+    }
 
-        pub fn init(client: *Client) Self {
-            return .{
-                .client = client,
-                .values = .{},
-                .handles = [_]?VarHandle{null} ** fields.len,
-                .present = [_]bool{false} ** fields.len,
-            };
-        }
+    pub fn tickCount(self: HeaderView) ?i32 {
+        const hdr = self.raw() orelse return null;
+        const buf = protocol.latestVarBuf(hdr) orelse return null;
+        return readSharedI32(&buf.tick_count);
+    }
 
-        /// Refresh every bound field from the latest polled row.
-        pub fn update(self: *Self) void {
-            inline for (fields, 0..) |f, i| {
-                self.present[i] = self.updateField(f.name, f.type, i);
+    pub fn variablesLen(self: HeaderView) usize {
+        const hdr = self.raw() orelse return 0;
+        const count = readSharedI32(&hdr.num_vars);
+        return if (count < 0) 0 else @intCast(count);
+    }
+
+    pub fn isConnected(self: HeaderView) bool {
+        return if (self.status()) |value| value.isConnected() else false;
+    }
+
+    fn raw(self: HeaderView) ?*const protocol.Header {
+        return protocol.readHeader(self.client.mem.view);
+    }
+};
+
+pub const SessionView = struct {
+    client: *const Client,
+
+    pub fn version(self: SessionView) ?i32 {
+        const hdr = protocol.readHeader(self.client.mem.view) orelse return null;
+        return readSharedI32(&hdr.session_info_update);
+    }
+
+    pub fn snapshot(self: SessionView) !session_mod.Snapshot {
+        const hdr = protocol.readHeader(self.client.mem.view) orelse return error.InvalidHeader;
+        const version_before = readSharedI32(&hdr.session_info_update);
+        const raw = hdr.sessionInfo(self.client.mem.view) orelse return error.NoSessionInfo;
+        const yaml = std.mem.trimEnd(u8, raw, "\x00");
+        var result = try session_mod.parse(self.client.allocator, yaml, version_before);
+        errdefer result.deinit();
+        if (readSharedI32(&hdr.session_info_update) != version_before) return error.LayoutChanged;
+        return result;
+    }
+};
+
+pub const VariablesView = struct {
+    client: *Client,
+
+    pub fn version(self: VariablesView) u64 {
+        return self.client.catalog_generation;
+    }
+
+    /// Resolve a native descriptor by name without allocating. Cache the returned
+    /// handle and pass it to `value` on every telemetry update.
+    pub fn find(self: VariablesView, name: []const u8) VariableError!?Variable {
+        const hdr = protocol.readHeader(self.client.mem.view) orelse return error.InvalidData;
+        const before = readCatalog(hdr) orelse return error.InvalidData;
+        if (!Catalog.eql(before, self.client.catalog)) return error.Stale;
+        const count: usize = @intCast(before.num_vars);
+        for (0..count) |index| {
+            const raw = protocol.readVarHeader(self.client.mem.view, hdr, index) orelse
+                return error.InvalidData;
+            if (std.mem.eql(u8, raw.nameSlice(), name)) {
+                const variable = parseVariable(raw, index, @intCast(before.buf_len), self.version()) orelse
+                    return error.InvalidData;
+                const after = readCatalog(hdr) orelse return error.LayoutChanged;
+                if (!Catalog.eql(before, after)) return error.LayoutChanged;
+                return variable;
             }
         }
+        const after = readCatalog(hdr) orelse return error.LayoutChanged;
+        if (!Catalog.eql(before, after)) return error.LayoutChanged;
+        return null;
+    }
 
-        fn updateField(self: *Self, comptime name: []const u8, comptime FieldType: type, comptime i: usize) bool {
-            const handle = self.resolveHandle(name, i) orelse return false;
-            const num = self.client.readNumber(handle) catch {
-                self.handles[i] = null;
-                return false;
-            };
-            const n = num orelse return false;
-            @field(self.values, name) = castNumber(FieldType, n);
-            return true;
-        }
+    /// Resolve one native IRSDK variable index without allocating.
+    pub fn at(self: VariablesView, native_index: usize) VariableError!Variable {
+        if (native_index >= @as(usize, @intCast(self.client.catalog.num_vars)))
+            return error.IndexOutOfBounds;
+        const hdr = protocol.readHeader(self.client.mem.view) orelse return error.InvalidData;
+        const before = readCatalog(hdr) orelse return error.InvalidData;
+        if (!Catalog.eql(before, self.client.catalog)) return error.Stale;
+        const raw = protocol.readVarHeader(self.client.mem.view, hdr, native_index) orelse
+            return error.InvalidData;
+        const variable = parseVariable(raw, native_index, @intCast(before.buf_len), self.version()) orelse
+            return error.InvalidData;
+        const after = readCatalog(hdr) orelse return error.LayoutChanged;
+        if (!Catalog.eql(before, after)) return error.LayoutChanged;
+        return variable;
+    }
 
-        fn resolveHandle(self: *Self, comptime name: []const u8, comptime i: usize) ?VarHandle {
-            if (self.handles[i]) |h| {
-                if (h.version == self.client.catalog.version) return h;
-            }
-            const resolved = self.client.resolve(name);
-            self.handles[i] = resolved;
-            return resolved;
-        }
+    pub fn descriptors(self: VariablesView) VariableError!DescriptorIterator {
+        const hdr = protocol.readHeader(self.client.mem.view) orelse return error.InvalidData;
+        const catalog = readCatalog(hdr) orelse return error.InvalidData;
+        if (!Catalog.eql(catalog, self.client.catalog)) return error.Stale;
+        return .{
+            .view = self,
+            .catalog_generation = self.version(),
+            .count = @intCast(catalog.num_vars),
+        };
+    }
 
-        /// Whether `field_name` was populated by the most recent `update`.
-        pub fn isPresent(self: *const Self, comptime field_name: []const u8) bool {
-            inline for (fields, 0..) |f, i| {
-                if (comptime std.mem.eql(u8, f.name, field_name)) return self.present[i];
-            }
-            @compileError("unknown binding field: " ++ field_name);
+    /// Read a caller-cached handle from the most recently polled owned row.
+    ///
+    /// Array bytes are borrowed and remain valid until the next successful `poll` or `deinit`.
+    pub fn value(self: VariablesView, variable: Variable) VariableError!VariableValue {
+        if (variable.catalog_generation != self.client.catalog_generation) return error.Stale;
+        if (variable.native_index >= @as(usize, @intCast(self.client.catalog.num_vars)) or
+            variable.end > self.client.row_buffer.len or variable.start > variable.end)
+        {
+            return error.InvalidData;
         }
+        const bytes = self.client.row_buffer[variable.start..variable.end];
+        if (variable.count == 1)
+            return decodeScalar(variable.var_type, bytes) orelse error.InvalidData;
+        return .{ .array = .{
+            .var_type = variable.var_type,
+            .count = variable.count,
+            .bytes = bytes,
+        } };
+    }
+};
+
+pub const DescriptorIterator = struct {
+    view: VariablesView,
+    catalog_generation: u64,
+    count: usize,
+    next_index: usize = 0,
+
+    pub fn next(self: *DescriptorIterator) VariableError!?VariableDescriptor {
+        if (self.catalog_generation != self.view.version()) return error.Stale;
+        if (self.next_index >= self.count) return null;
+        const hdr = protocol.readHeader(self.view.client.mem.view) orelse return error.InvalidData;
+        const before = readCatalog(hdr) orelse return error.InvalidData;
+        if (!Catalog.eql(before, self.view.client.catalog)) return error.LayoutChanged;
+        const index = self.next_index;
+        const raw = protocol.readVarHeader(self.view.client.mem.view, hdr, index) orelse
+            return error.InvalidData;
+        const result = parseVariableDescriptor(raw, index) orelse return error.InvalidData;
+        const after = readCatalog(hdr) orelse return error.LayoutChanged;
+        if (!Catalog.eql(before, after)) return error.LayoutChanged;
+        self.next_index += 1;
+        return result;
+    }
+};
+
+fn parseVariable(
+    raw: *const protocol.VarHeader,
+    native_index: usize,
+    row_len: usize,
+    catalog_generation: u64,
+) ?Variable {
+    const var_type = raw.varType() orelse return null;
+    if (raw.offset < 0 or raw.count <= 0) return null;
+    const count: usize = @intCast(raw.count);
+    const start: usize = @intCast(raw.offset);
+    const size = variableByteSize(var_type) orelse return null;
+    const total = std.math.mul(usize, count, size) catch return null;
+    const end = std.math.add(usize, start, total) catch return null;
+    if (end > row_len) return null;
+    return .{
+        .native_index = native_index,
+        .catalog_generation = catalog_generation,
+        .var_type = var_type,
+        .count = count,
+        .start = start,
+        .end = end,
     };
 }
 
-fn isNumericField(comptime FieldType: type) bool {
-    return switch (@typeInfo(FieldType)) {
-        .int, .float, .bool => true,
-        else => false,
+fn parseVariableDescriptor(raw: *const protocol.VarHeader, native_index: usize) ?VariableDescriptor {
+    const var_type = raw.varType() orelse return null;
+    if (raw.offset < 0 or raw.count <= 0) return null;
+    const name = std.mem.sliceTo(&raw.name, 0);
+    const description = std.mem.sliceTo(&raw.desc, 0);
+    const unit = std.mem.sliceTo(&raw.unit, 0);
+    var result = VariableDescriptor{
+        .native_index = native_index,
+        .var_type = var_type,
+        .offset = @intCast(raw.offset),
+        .count = @intCast(raw.count),
+        .count_as_time = raw.count_as_time != 0,
+        .name_buffer = @splat(0),
+        .name_len = @intCast(name.len),
+        .description_buffer = @splat(0),
+        .description_len = @intCast(description.len),
+        .unit_buffer = @splat(0),
+        .unit_len = @intCast(unit.len),
+    };
+    @memcpy(result.name_buffer[0..name.len], name);
+    @memcpy(result.description_buffer[0..description.len], description);
+    @memcpy(result.unit_buffer[0..unit.len], unit);
+    return result;
+}
+
+fn readCatalog(hdr: *const protocol.Header) ?Catalog {
+    const num_vars = readSharedI32(&hdr.num_vars);
+    const var_header_offset = readSharedI32(&hdr.var_header_offset);
+    const buf_len = readSharedI32(&hdr.buf_len);
+    if (num_vars < 0 or var_header_offset < 0 or buf_len <= 0) return null;
+    return .{
+        .num_vars = num_vars,
+        .var_header_offset = var_header_offset,
+        .buf_len = buf_len,
     };
 }
 
-fn castNumber(comptime FieldType: type, n: f64) FieldType {
-    return switch (@typeInfo(FieldType)) {
-        .float => @floatCast(n),
-        .int => @intFromFloat(@round(n)),
-        .bool => n != 0,
-        else => @compileError("unsupported binding field type: " ++ @typeName(FieldType)),
-    };
-}
-
-pub fn decodeScalar(var_type: protocol.VarType, data: []const u8) ?VarValue {
-    const elem_size = var_type.byteSize();
-    if (data.len < elem_size) return null;
+fn decodeScalar(var_type: protocol.VarType, data: []const u8) ?VariableValue {
+    const size = variableByteSize(var_type) orelse return null;
+    if (data.len < size) return null;
     return switch (var_type) {
         .char => .{ .char = data[0] },
         .bool => .{ .bool = data[0] != 0 },
@@ -558,51 +580,35 @@ pub fn decodeScalar(var_type: protocol.VarType, data: []const u8) ?VarValue {
         .bit_field => .{ .bit_field = std.mem.readInt(u32, data[0..4], .little) },
         .float => .{ .float = @bitCast(std.mem.readInt(u32, data[0..4], .little)) },
         .double => .{ .double = @bitCast(std.mem.readInt(u64, data[0..8], .little)) },
+        .count => null,
     };
 }
 
-test "decode scalar int" {
-    var buf: [4]u8 = undefined;
-    std.mem.writeInt(i32, &buf, 3, .little);
-    const v = decodeScalar(.int, &buf).?;
-    try std.testing.expect(v == .int);
-    try std.testing.expectEqual(@as(i32, 3), v.int);
+fn variableByteSize(var_type: protocol.VarType) ?usize {
+    return switch (var_type) {
+        .char, .bool => 1,
+        .int, .bit_field, .float => 4,
+        .double => 8,
+        .count => null,
+    };
 }
 
-test "decode scalar float" {
-    var buf: [4]u8 = undefined;
-    const f: f32 = 42.5;
-    std.mem.writeInt(u32, &buf, @bitCast(f), .little);
-    const v = decodeScalar(.float, &buf).?;
-    try std.testing.expect(v == .float);
-    try std.testing.expectApproxEqAbs(42.5, v.float, 0.001);
-}
-
-test "VarValue coerce, toNumber" {
-    try std.testing.expectEqual(@as(i32, 3), (VarValue{ .int = 3 }).coerce(i32));
-    try std.testing.expectEqual(@as(f32, 1.5), (VarValue{ .float = 1.5 }).coerce(f32));
-    try std.testing.expectEqual(@as(f64, 2.5), (VarValue{ .double = 2.5 }).coerce(f64));
-    try std.testing.expect((VarValue{ .float = 1.0 }).coerce(i32) == error.TypeMismatch);
-    try std.testing.expectEqual(@as(f64, 7), (VarValue{ .int = 7 }).toNumber());
-    try std.testing.expectEqual(@as(f64, 1), (VarValue{ .bool = true }).toNumber());
-}
-
-/// Build a single-variable fixture client over `mem`/`row_buffer` for tests.
 fn fixtureClient(
     mem: []u8,
     row_buffer: []u8,
     var_type: protocol.VarType,
     count: i32,
     name: []const u8,
-) !Client {
+) Client {
     @memset(mem, 0);
     const hdr: *protocol.Header = @ptrCast(@alignCast(mem.ptr));
     hdr.* = testing.initHeader(.{
+        .status = protocol.status_connected,
         .session_info_update = 1,
         .num_vars = 1,
         .buf_len = @intCast(row_buffer.len),
         .var_buf = .{
-            .{ .tick_count = 1, .buf_offset = 200, .tick_count_begin = 1, ._pad = 0 },
+            .{ .tick_count = 1, .buf_offset = 300, .tick_count_begin = 1, ._pad = 0 },
             std.mem.zeroes(protocol.VarBuf),
             std.mem.zeroes(protocol.VarBuf),
             std.mem.zeroes(protocol.VarBuf),
@@ -613,118 +619,286 @@ fn fixtureClient(
         .type = @intFromEnum(var_type),
         .count = count,
         .name = name,
-        .offset = 0,
     });
-    var client = Client{
-        .mem = .{},
+    return .{
+        .mem = .{ .view = mem },
         .allocator = std.testing.allocator,
-        .catalog = catalog_mod.Catalog.init(std.testing.allocator),
         .row_buffer = row_buffer,
+        .scratch_buffer = row_buffer,
+        .catalog = readCatalog(hdr).?,
+        .last_tick = 1,
+        .connected = true,
+        .owns_buffers = false,
     };
-    try client.catalog.rebuild(mem, hdr);
-    return client;
 }
 
-test "getAs, getValue, getNumber distinguish missing, array, mismatch" {
-    var mem: [512]u8 = undefined;
-    var row_buffer: [4]u8 = undefined;
-    std.mem.writeInt(i32, &row_buffer, 4, .little);
-    var client = try fixtureClient(&mem, &row_buffer, .int, 1, "Gear");
-    defer client.catalog.deinit();
+test "header facade exposes selected values" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.tick_rate = 60;
 
-    try std.testing.expectEqual(@as(i32, 4), try client.getAs(i32, "Gear"));
-    try std.testing.expectEqual(@as(f64, 4), client.getNumber("Gear").?);
-    try std.testing.expect(client.getAs(bool, "Gear") == error.TypeMismatch);
-    try std.testing.expect(client.getAs(i32, "Missing") == error.NotFound);
-    try std.testing.expect(client.getValue("Missing") == error.NotFound);
-    try std.testing.expect(client.getNumber("Missing") == null);
+    try std.testing.expectEqual(@as(?i32, protocol.header_version), client.header().version());
+    try std.testing.expectEqual(@as(?i32, 60), client.header().tickRate());
+    try std.testing.expectEqual(@as(usize, 1), client.header().variablesLen());
+    try std.testing.expect(client.header().isConnected());
 }
 
-test "getValue reports IsArray for non-scalar variables" {
-    var mem: [512]u8 = undefined;
-    var row_buffer: [8]u8 = undefined;
-    @memset(&row_buffer, 0);
-    var client = try fixtureClient(&mem, &row_buffer, .int, 2, "Wide");
-    defer client.catalog.deinit();
-
-    try std.testing.expect(client.getValue("Wide") == error.IsArray);
-    try std.testing.expect(client.getAs(i32, "Wide") == error.IsArray);
-    try std.testing.expect(client.getNumber("Wide") == null);
-    try std.testing.expect(client.get("Wide") == null);
+test "descriptor iterator preserves native indices and metadata" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    var descriptors = try client.variables().descriptors();
+    const descriptor = (try descriptors.next()).?;
+    try std.testing.expectEqual(@as(usize, 0), descriptor.native_index);
+    try std.testing.expectEqualStrings("Gear", descriptor.name());
+    try std.testing.expect((try descriptors.next()) == null);
 }
 
-test "handle reads and detect staleness on catalog rebuild" {
-    var mem: [512]u8 = undefined;
-    var row_buffer: [4]u8 = undefined;
-    std.mem.writeInt(i32, &row_buffer, 5, .little);
-    var client = try fixtureClient(&mem, &row_buffer, .int, 1, "Gear");
-    defer client.catalog.deinit();
+test "value returns scalar and borrowed array" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var scalar_row: [4]u8 = undefined;
+    std.mem.writeInt(i32, &scalar_row, 4, .little);
+    var scalar_client = fixtureClient(&mem, &scalar_row, .int, 1, "Gear");
+    const scalar_handle = (try scalar_client.variables().find("Gear")).?;
+    const scalar = try scalar_client.variables().value(scalar_handle);
+    try std.testing.expectEqual(@as(i32, 4), scalar.int);
 
-    const handle = client.resolve("Gear").?;
-    try std.testing.expectEqual(@as(i32, 5), try client.read(i32, handle));
-    try std.testing.expectEqual(@as(f64, 5), (try client.readNumber(handle)).?);
+    var array_row: [8]u8 = undefined;
+    std.mem.writeInt(i32, array_row[0..4], 5, .little);
+    std.mem.writeInt(i32, array_row[4..8], 6, .little);
+    var array_client = fixtureClient(&mem, &array_row, .int, 2, "Pair");
+    const array_handle = try array_client.variables().at(0);
+    const array = (try array_client.variables().value(array_handle)).array;
+    try std.testing.expectEqual(@as(usize, 2), array.count);
+    try std.testing.expectEqual(@as(i32, 6), array.value(1).?.int);
+}
 
-    // Rebuild the catalog (new session) — the old handle must now be stale.
+test "value uses caller cached metadata on hot path" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = undefined;
+    std.mem.writeInt(i32, &row, 7, .little);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    const handle = (try client.variables().find("Gear")).?;
+    try std.testing.expectEqual(@as(i32, 7), (try client.variables().value(handle)).int);
+    const raw: *protocol.VarHeader = @ptrCast(@alignCast(&mem[@sizeOf(protocol.Header)]));
+    raw.offset = 999;
+
+    // The hot path uses metadata paired with the last successful poll, not volatile headers.
+    try std.testing.expectEqual(@as(i32, 7), (try client.variables().value(handle)).int);
+}
+
+test "session update does not invalidate telemetry handle" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    const handle = (try client.variables().find("Gear")).?;
     const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
     hdr.session_info_update = 2;
-    try client.catalog.rebuild(&mem, hdr);
-    try std.testing.expect(client.read(i32, handle) == error.Stale);
+    const raw: *protocol.VarHeader = @ptrCast(@alignCast(&mem[@sizeOf(protocol.Header)]));
+    raw.offset = 999;
+    try std.testing.expectEqual(@as(i32, 0), (try client.variables().value(handle)).int);
+    try std.testing.expectEqual(PollStatus.unchanged, client.poll());
+    try std.testing.expectEqual(@as(u64, 1), client.variables().version());
 }
 
-test "comptime struct binding fills typed fields" {
-    var mem: [512]u8 = undefined;
-    var row_buffer: [4]u8 = undefined;
-    std.mem.writeInt(i32, &row_buffer, 3, .little);
-    var client = try fixtureClient(&mem, &row_buffer, .int, 1, "Gear");
-    defer client.catalog.deinit();
+test "successful poll advances catalog generation on structural change" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    const old_handle = (try client.variables().find("Gear")).?;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.var_header_offset += protocol.var_header_stride;
 
-    const Telemetry = struct {
-        Gear: i32 = -99,
-        Missing: f32 = 1.25,
-    };
-    var bound = client.bind(Telemetry);
-    bound.update();
-
-    try std.testing.expectEqual(@as(i32, 3), bound.values.Gear);
-    try std.testing.expect(bound.isPresent("Gear"));
-    try std.testing.expect(!bound.isPresent("Missing"));
-    try std.testing.expectEqual(@as(f32, 1.25), bound.values.Missing);
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    try std.testing.expectEqual(@as(u64, 2), client.variables().version());
+    try std.testing.expect(client.variables().value(old_handle) == error.Stale);
 }
 
-test "getRaw returns null when variable extends past row buffer" {
-    var mem: [512]u8 = undefined;
-    var row_buffer: [8]u8 = undefined;
-    @memset(&row_buffer, 0);
-    var client = try fixtureClient(&mem, &row_buffer, .double, 2, "Wide");
-    defer client.catalog.deinit();
+test "value validates native index and row bounds" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .double, 1, "TooWide");
+    try std.testing.expect(client.variables().at(1) == error.IndexOutOfBounds);
+    try std.testing.expect(client.variables().at(0) == error.InvalidData);
+}
 
-    try std.testing.expect(client.getRaw("Wide") == null);
+test "poll skips row copy for unchanged tick" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = .{ 1, 2, 3, 4 };
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    mem[300] = 99;
+    const raw: *protocol.VarHeader = @ptrCast(@alignCast(&mem[@sizeOf(protocol.Header)]));
+    raw.offset = 999;
+
+    try std.testing.expectEqual(PollStatus.unchanged, client.poll());
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, client.row_buffer);
+}
+
+test "poll reports stale after configured no-update timeout" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.configureLiveness(std.testing.io, std.Io.Duration.fromMilliseconds(1));
+    try std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(2), .awake);
+
+    try std.testing.expectEqual(PollStatus.stale, client.poll());
+    try std.testing.expect(!client.isConnected());
+}
+
+test "poll treats tick rollback as a reset update" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    const handle = (try client.variables().find("Gear")).?;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.var_buf[0].tick_count = 0;
+    hdr.var_buf[0].tick_count_begin = 0;
+    mem[300] = 42;
+
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    try std.testing.expectEqual(@as(?i32, 0), client.last_tick);
+    try std.testing.expectEqual(@as(u8, 42), client.row_buffer[0]);
+    try std.testing.expectEqual(@as(u64, 2), client.variables().version());
+    try std.testing.expect(client.variables().value(handle) == error.Stale);
+}
+
+test "new frame polling does not inspect descriptors" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    const handle = (try client.variables().find("Gear")).?;
+    const raw: *protocol.VarHeader = @ptrCast(@alignCast(&mem[@sizeOf(protocol.Header)]));
+    raw.offset = 999;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.var_buf[0].tick_count = 2;
+    hdr.var_buf[0].tick_count_begin = 2;
+    std.mem.writeInt(i32, mem[300..304], 8, .little);
+
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    try std.testing.expectEqual(@as(u64, 1), client.variables().version());
+    try std.testing.expectEqual(@as(i32, 8), (try client.variables().value(handle)).int);
+}
+
+test "poll transactionally resizes owned row buffers" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.buf_len = 8;
+    hdr.var_buf[0].tick_count = 2;
+    hdr.var_buf[0].tick_count_begin = 2;
+    mem[300] = 77;
+
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    defer {
+        client.allocator.free(client.row_buffer);
+        client.allocator.free(client.scratch_buffer);
+    }
+    try std.testing.expect(client.owns_buffers);
+    try std.testing.expectEqual(@as(usize, 8), client.row_buffer.len);
+    try std.testing.expectEqual(@as(u8, 77), client.row_buffer[0]);
+    try std.testing.expectEqual(@as(u64, 2), client.variables().version());
+}
+
+test "failed resize preserves existing row buffers" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = .{ 1, 2, 3, 4 };
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    var no_space: [0]u8 = .{};
+    var fixed = std.heap.FixedBufferAllocator.init(&no_space);
+    client.allocator = fixed.allocator();
+    const original_row = client.row_buffer.ptr;
+    const original_scratch = client.scratch_buffer.ptr;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.buf_len = 8;
+    hdr.var_buf[0].tick_count = 2;
+    hdr.var_buf[0].tick_count_begin = 2;
+
+    try std.testing.expectEqual(PollStatus.rebuild_failed, client.poll());
+    try std.testing.expect(client.isConnected());
+    try std.testing.expectEqual(original_row, client.row_buffer.ptr);
+    try std.testing.expectEqual(original_scratch, client.scratch_buffer.ptr);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, client.row_buffer);
+}
+
+test "descriptor iterator is invalidated by catalog generation" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    var iterator = try client.variables().descriptors();
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.num_vars = 0;
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    try std.testing.expect(iterator.next() == error.Stale);
+}
+
+test "reconnection invalidates handles even when tick is unchanged" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var scratch: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    client.scratch_buffer = &scratch;
+    const handle = (try client.variables().find("Gear")).?;
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.status = 0;
+    try std.testing.expectEqual(PollStatus.disconnected, client.poll());
+    hdr.status = protocol.status_connected;
+
+    try std.testing.expectEqual(PollStatus.updated, client.poll());
+    try std.testing.expectEqual(@as(u64, 2), client.variables().version());
+    try std.testing.expect(client.variables().value(handle) == error.Stale);
+}
+
+test "scalar decoder preserves every IRSDK wire type" {
+    try std.testing.expectEqual(@as(u8, 'z'), decodeScalar(.char, "z").?.char);
+    try std.testing.expect(decodeScalar(.bool, &.{1}).?.bool);
+
+    var word: [4]u8 = undefined;
+    std.mem.writeInt(i32, &word, -12, .little);
+    try std.testing.expectEqual(@as(i32, -12), decodeScalar(.int, &word).?.int);
+    std.mem.writeInt(u32, &word, 0xa5a5, .little);
+    try std.testing.expectEqual(@as(u32, 0xa5a5), decodeScalar(.bit_field, &word).?.bit_field);
+    std.mem.writeInt(u32, &word, @bitCast(@as(f32, 3.5)), .little);
+    try std.testing.expectEqual(@as(f32, 3.5), decodeScalar(.float, &word).?.float);
+
+    var double_word: [8]u8 = undefined;
+    std.mem.writeInt(u64, &double_word, @bitCast(@as(f64, -9.25)), .little);
+    try std.testing.expectEqual(@as(f64, -9.25), decodeScalar(.double, &double_word).?.double);
+}
+
+test "poll clears connected state when status is clear" {
+    var mem: [512]u8 align(@alignOf(protocol.Header)) = undefined;
+    var row: [4]u8 = @splat(0);
+    var client = fixtureClient(&mem, &row, .int, 1, "Gear");
+    const hdr: *protocol.Header = @ptrCast(@alignCast(&mem));
+    hdr.status = 0;
+    try std.testing.expectEqual(PollStatus.disconnected, client.poll());
+    try std.testing.expect(!client.isConnected());
 }
 
 test "connect and deinit release resources" {
-    const allocator = std.testing.allocator;
-    const result = Client.connect(allocator);
+    const result = Client.connect(std.testing.allocator);
     if (result) |client| {
-        var c = client;
-        c.deinit();
+        var connected = client;
+        connected.deinit();
     } else |err| switch (err) {
         error.NotFound, error.MapFailed, error.InvalidHeader => {},
-        else => return err,
-    }
-}
-
-test "connect to missing shared memory returns NotFound" {
-    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
-
-    const result = core.transport.mmap.SharedMemory.open(.{
-        .name = "Local\\librace_a8f3c912_connect_test_missing",
-    });
-    if (result) |opened| {
-        var mem = opened;
-        defer mem.close();
-        return error.TestExpectedError;
-    } else |err| switch (err) {
-        error.NotFound => {},
         else => return err,
     }
 }
