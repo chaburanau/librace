@@ -16,6 +16,7 @@ test {
     std.testing.refAllDecls(simulators.acc);
     std.testing.refAllDecls(simulators.ace);
     std.testing.refAllDecls(simulators.acr);
+    std.testing.refAllDecls(simulators.ams2);
     std.testing.refAllDecls(simulators.fh6);
     std.testing.refAllDecls(simulators.lmu);
     std.testing.refAllDecls(simulators.r3e);

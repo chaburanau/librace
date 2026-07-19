@@ -13,7 +13,7 @@ Each simulator uses different transports and data layouts. This library abstract
 | Shape | Simulators | Primary access |
 |-------|------------|----------------|
 | **Dynamic snapshots** | iRacing | Allocation-free variable handles, owned telemetry rows, and lazy session queries |
-| **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6, R3E | Typed snapshots (`physics()`, `telemetry()`, `packet()`, `shared()`, …); string helpers on `protocol` structs |
+| **Fixed structs** | AC, ACC, ACE, ACR, AMS2, LMU, FH6, R3E | Typed snapshots (`physics()`, `telemetry()`, `packet()`, `shared()`, …); string helpers on `protocol` structs |
 
 Do not add a shared `Telemetry { speed, gear, … }` struct to the SDK — callers read what they need from native layouts or snapshots.
 
@@ -60,6 +60,7 @@ build.zig.zon
 | `acc` | Assetto Corsa Competizione |
 | `ace` | Assetto Corsa Evo |
 | `acr` | Assetto Corsa Rally |
+| `ams2` | Automobilista 2 |
 | `lmu` | Le Mans Ultimate |
 | `fh6` | Forza Horizon 6 |
 | `r3e` | RaceRoom Racing Experience |
@@ -70,7 +71,7 @@ When adding a new title, use a short lowercase folder name and add it to `src/si
 
 Simulators expose telemetry through one or more channels:
 
-- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts (`acpmf_*`), LMU native (`LMU_Data`), RaceRoom (`$R3E`), rF2-family plugin buffers.
+- **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts (`acpmf_*`), LMU native (`LMU_Data`), RaceRoom (`$R3E`), Automobilista 2 (`$pcars2$`), rF2-family plugin buffers.
 - **UDP** — FH6 Data Out (324-byte dash packet on a configurable port; default `20066`).
 - **Hybrid** — some titles use both; implement whichever channel is needed for complete data.
 - **Custom** — reserve `TransportKind.custom` for WebSocket, TCP, or proprietary APIs.
@@ -84,7 +85,7 @@ Do not put simulator-specific struct layouts in `core/`.
 When implementing any simulator module:
 
 1. **Do not assume** what callers need — avoid opinionated structs that pre-parse a fixed field set (no `Telemetry { speed, gear, … }` in the SDK).
-2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
+2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, AMS2, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
 3. **Provide discovery where it fits** — iRacing exposes a version-checked descriptor iterator with native IRSDK indices. Fixed-layout simulators export `field_count` (comptime protocol field total).
 4. **Provide constants sparingly** — `keys.zig` is for common iRacing map keys and variable names. Fixed-layout simulators use protocol struct field names directly.
 5. **Keep parsing minimal** — decode types and copy rows from shared memory or UDP; let callers build higher-level models in their own code.
@@ -219,7 +220,32 @@ while (client.poll() == .ok) {
 `connect` returns `error.NotFound` when RRRE is not running and `error.VersionMismatch` on an
 incompatible major version.
 
-### Fixed-struct simulators (ACC, ACE, ACR, LMU, FH6, R3E)
+### Automobilista 2 public API (implemented)
+
+Design: **typed `shared()` snapshot** of the official `$pcars2$` layout (SHARED_MEMORY_VERSION 14).
+Hot `poll()` copies player/session fields with `sequence_number` torn-read protection; the 64-entry
+participant grid and per-driver arrays load only when `participants()` is requested. UTF-8 string
+helpers and unit converters live on `Shared` / `ParticipantInfo`.
+
+```zig
+const ams2 = librace.simulators.ams2;
+
+var client = try ams2.connect(allocator, io, .{});
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const s = client.shared();
+    const speed_kmh = s.speedKmh();
+    const rpm = s.rpm;
+    const track = s.trackLocation();
+    _ = .{ speed_kmh, rpm, track, client.participants() };
+}
+```
+
+`connect` returns `error.NotFound` when AMS2 is not running (or Shared Memory is not set to
+**Project CARS 2**) and `error.VersionMismatch` on an incompatible layout version.
+
+### Fixed-struct simulators (ACC, ACE, ACR, AMS2, LMU, FH6, R3E)
 
 Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `keys.zig`, or generic
 `getAs`/`resolve`/`read` helpers.
@@ -229,6 +255,7 @@ Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `k
 | ACC | `physics()`, `graphics()`, `static()` | `trackUtf8`, `carModelUtf8`, `playerNameUtf8`, … (UTF-16) |
 | ACE | `physics()`, `graphics()`, `static()` | `trackName()`, `carModel()`, `driverName()` (ASCII C strings) |
 | ACR | `physics()`, `graphics()`, `static()` | Same UTF-16 helpers as AC; liveness via physics `packetId` |
+| AMS2 | `shared()`, optional `participants()` | `trackLocation()`, `carName()`, `playerName()`, `nameUtf8` on `ParticipantInfo` (UTF-8); `speedKmh()` on `Shared` |
 | LMU | `telemetry()`, `session()`, `vehicle()` | `trackNameUtf8`, `vehicleNameUtf8`, `driverNameUtf8` (ANSI) |
 | FH6 | `packet()` | `speedKmh()`, `displayGear()`, `formatCarSummary()` on the UDP packet struct |
 | R3E | `shared()`, optional `drivers()` | `trackName()`, `layoutName()`, `playerName()`, `nameUtf8` on `DriverInfo` (UTF-8); `speedKmh()` / `engineRpm()` on `Shared` |
@@ -268,7 +295,7 @@ zig build run-dashboard-<name>      # Real-time dashboard for one simulator
 zig build dashboard -Dsim=<name>    # Alias for run-dashboard-<name>
 ```
 
-Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `lmu`, `fh6`, `r3e`.
+Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `ams2`, `lmu`, `fh6`, `r3e`.
 
 Binaries: `zig-out/bin/<name>` (simple), `zig-out/bin/dashboard-<name>` (dashboard).
 
@@ -318,6 +345,7 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, typed struct snapshots with wstring helpers, live poll |
 | `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings with decode helpers on protocol structs, live poll |
 | `fh6` | **Implemented** — UDP Data Out (324-byte Horizon dash packet), typed `packet()` snapshot access, live poll |
+| `ams2` | **Implemented** — official `$pcars2$` shared memory (SHARED_MEMORY_VERSION 14), typed `shared()` snapshot with on-demand `participants()`, UTF-8 string helpers, live poll |
 | `r3e` | **Implemented** — official `$R3E` shared memory (API v3.5), typed `shared()` core snapshot with on-demand `drivers()`, UTF-8 string helpers, live poll |
 
 Next work is typically whichever title the user requests — follow the workflow above. rF2-family titles may reuse patterns from the iRacing IRSDK section or LMU's fixed-struct native shared-memory layout, depending on their exposed telemetry interface.
