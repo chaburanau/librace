@@ -4,7 +4,6 @@ const example_common = @import("example_common");
 
 const fh6 = librace.simulators.fh6;
 const simple = example_common.simple;
-const connect_timeout = std.Io.Duration.fromSeconds(30);
 const poll_timeout: std.Io.Timeout = .{ .duration = .{
     .raw = std.Io.Duration.fromSeconds(30),
     .clock = .awake,
@@ -15,7 +14,7 @@ const Context = struct {
     car_buf: [64]u8 = undefined,
 
     pub fn connect(ctx: *Context, io: std.Io) !void {
-        ctx.client = try fh6.connect(io, .{ .timeout = connect_timeout });
+        ctx.client = try fh6.connect(io, .{});
     }
 
     pub fn deinit(ctx: *Context, io: std.Io) void {
@@ -51,10 +50,6 @@ const Context = struct {
         switch (err) {
             error.AddressInUse => try w.print(
                 "UDP port {d} is already in use — close other telemetry apps using this port.\n",
-                .{fh6.default_port},
-            ),
-            error.Timeout => try w.print(
-                "UDP port {d} did not become available within 30s.\n",
                 .{fh6.default_port},
             ),
             else => try w.print(

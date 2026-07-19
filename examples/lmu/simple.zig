@@ -46,8 +46,7 @@ const Context = struct {
         try w.print("Connect failed: {s}\n", .{@errorName(err)});
         switch (err) {
             error.NotFound => try w.print("LMU shared memory not found - is Le Mans Ultimate running with Enable Plugins on?\n", .{}),
-            error.MapFailed => try w.print("LMU shared memory found but could not be mapped.\n", .{}),
-            error.InvalidData => try w.print("LMU shared memory mapped but the page was smaller than expected.\n", .{}),
+            error.MapFailed => try w.print("LMU shared memory found but could not be mapped at the required size.\n", .{}),
             error.UnsupportedPlatform => try w.print("LMU native telemetry is only supported on Windows.\n", .{}),
             else => try w.print("Enter a live session before running the example.\n", .{}),
         }

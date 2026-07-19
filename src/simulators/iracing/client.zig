@@ -12,6 +12,7 @@ pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidHeader,
     OutOfMemory,
     Timeout,
+    Canceled,
 };
 
 /// Failure modes for type-coercing scalar reads.

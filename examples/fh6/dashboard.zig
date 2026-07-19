@@ -11,8 +11,6 @@ pub const title = "Forza Horizon 6 | librace";
 const rad_to_deg: f64 = 180.0 / std.math.pi;
 const steer_to_deg: f64 = 900.0 / 127.0;
 
-/// Allow time for a conflicting telemetry app to release the UDP port before giving up.
-const connect_timeout = std.Io.Duration.fromSeconds(120);
 const poll_timeout: std.Io.Timeout = .{ .duration = .{
     .raw = std.Io.Duration.fromMilliseconds(500),
     .clock = .awake,
@@ -26,7 +24,7 @@ pub const Context = struct {
 };
 
 pub fn connect(ctx: *Context, io: std.Io) !void {
-    ctx.client = try fh6.connect(io, .{ .timeout = connect_timeout });
+    ctx.client = try fh6.connect(io, .{});
 }
 
 pub fn deinit(ctx: *Context, io: std.Io) void {
@@ -48,10 +46,6 @@ pub fn connectErrorHint(_: *Context, err: anyerror, w: *std.Io.Writer) !void {
         error.AddressInUse => try w.print(
             "UDP port {d} is already in use — close other apps (SimHub, another dashboard, zig build run-fh6).\n",
             .{fh6.default_port},
-        ),
-        error.Timeout => try w.print(
-            "UDP port {d} did not become available within {d}s.\n",
-            .{ fh6.default_port, connect_timeout.toSeconds() },
         ),
         else => try w.print(
             "Settings → HUD and Gameplay → Data Out: On, IP 127.0.0.1, port {d}.\n",

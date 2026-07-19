@@ -53,8 +53,9 @@ pub const SharedMemory = struct {
             return OpenError.NotFound;
         }
 
-        // Pass 0 to map the entire section (required when the object size differs from `config.size`).
-        const view_ptr = MapViewOfFile(mapping, access, 0, 0, 0);
+        // Request the required length so Windows rejects undersized sections
+        // instead of letting us construct a slice beyond the mapped view.
+        const view_ptr = MapViewOfFile(mapping, access, 0, 0, config.size);
         if (view_ptr == null) {
             windows.CloseHandle(mapping);
             return OpenError.MapFailed;

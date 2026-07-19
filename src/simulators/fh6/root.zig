@@ -27,29 +27,7 @@ pub const packet_size = protocol.packet_size;
 pub const field_count = protocol.field_count;
 
 pub fn connect(io: std.Io, options: ConnectOptions) ConnectError!Client {
-    return core.connect.retry(Client, ConnectError, ConnectContext, io, .{
-        .io = io,
-        .config = options.config,
-    }, .{
-        .timeout = options.timeout,
-        .retry_interval = options.retry_interval,
-    }, connectOnce, isRetryableConnectError);
-}
-
-const ConnectContext = struct {
-    io: std.Io,
-    config: Config,
-};
-
-fn connectOnce(ctx: ConnectContext) ConnectError!Client {
-    return Client.connect(ctx.io, ctx.config);
-}
-
-fn isRetryableConnectError(err: ConnectError) bool {
-    return switch (err) {
-        error.AddressInUse => true,
-        else => false,
-    };
+    return Client.connect(io, options.config);
 }
 
 test {

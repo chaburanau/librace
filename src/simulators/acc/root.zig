@@ -39,7 +39,7 @@ pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions
 
 fn isRetryableConnectError(err: ConnectError) bool {
     return switch (err) {
-        error.NotFound, error.InvalidData => true,
+        error.NotFound, error.MapFailed => true,
         else => false,
     };
 }

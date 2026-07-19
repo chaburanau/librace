@@ -5,9 +5,9 @@ const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
-    InvalidData,
     OutOfMemory,
     Timeout,
+    Canceled,
 };
 
 pub const PollStatus = enum {
@@ -38,7 +38,6 @@ pub const Client = struct {
             .size = @sizeOf(protocol.SharedMemoryObjectOut),
         });
         errdefer mem.close();
-        if (mem.view.len < @sizeOf(protocol.SharedMemoryObjectOut)) return error.InvalidData;
 
         var lock: ?SharedMemoryLock = SharedMemoryLock.open() catch null;
         errdefer if (lock) |*l| l.close();
@@ -265,7 +264,7 @@ test "connect handles available or missing LMU shared memory" {
         var c = client;
         c.deinit();
     } else |err| switch (err) {
-        error.NotFound, error.MapFailed, error.InvalidData => {},
+        error.NotFound, error.MapFailed => {},
         else => return err,
     }
 }

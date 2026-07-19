@@ -281,7 +281,7 @@ while (client.poll() == .ok) {
 
 ### Forza Horizon 6
 
-FH6 broadcasts a fixed 324-byte UDP datagram while driving. Enable **Settings → HUD and Gameplay → Data Out** (default port `20066`).
+FH6 broadcasts a fixed 324-byte UDP datagram while driving. Enable **Settings → HUD and Gameplay → Data Out** (default port `20066`). `connect` binds the local UDP port immediately; the timeout passed to `poll` controls how long to wait for telemetry.
 
 ```zig
 const fh6 = librace.simulators.fh6;

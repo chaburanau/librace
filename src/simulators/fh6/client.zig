@@ -5,7 +5,7 @@ const std = @import("std");
 const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
 
-pub const ConnectError = core.transport.udp.UdpListener.OpenError || error{Timeout};
+pub const ConnectError = core.transport.udp.UdpListener.OpenError;
 pub const PollError = error{Canceled};
 
 pub const PollStatus = enum {
@@ -25,9 +25,6 @@ pub const Config = struct {
 
 pub const ConnectOptions = struct {
     config: Config = .{},
-    /// Omitted/null means one bind attempt.
-    timeout: ?std.Io.Duration = null,
-    retry_interval: std.Io.Duration = std.Io.Duration.fromMilliseconds(50),
 };
 
 pub const Client = struct {

@@ -47,8 +47,7 @@ const Context = struct {
         try w.print("Connect failed: {s}\n", .{@errorName(err)});
         switch (err) {
             error.NotFound => try w.print("Shared memory not found — is Assetto Corsa Rally running and in a stage?\n", .{}),
-            error.MapFailed => try w.print("Shared memory found but could not be mapped.\n", .{}),
-            error.InvalidData => try w.print("Shared memory mapped but the page was smaller than expected.\n", .{}),
+            error.MapFailed => try w.print("Shared memory found but could not be mapped at the required size.\n", .{}),
             error.UnsupportedPlatform => try w.print("AC Rally telemetry is only supported on Windows.\n", .{}),
             else => try w.print("Enter a live stage before running the example.\n", .{}),
         }

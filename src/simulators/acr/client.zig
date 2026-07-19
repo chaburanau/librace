@@ -6,9 +6,9 @@ const core = @import("../../core/root.zig");
 const protocol = @import("protocol.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
-    InvalidData,
     OutOfMemory,
     Timeout,
+    Canceled,
 };
 
 pub const PollStatus = enum {
@@ -37,14 +37,12 @@ pub const Client = struct {
             .size = @sizeOf(protocol.Physics),
         });
         errdefer phys_mem.close();
-        if (phys_mem.view.len < @sizeOf(protocol.Physics)) return error.InvalidData;
 
         var gfx_mem = try core.transport.mmap.SharedMemory.open(.{
             .name = protocol.graphics_map_name,
             .size = @sizeOf(protocol.Graphics),
         });
         errdefer gfx_mem.close();
-        if (gfx_mem.view.len < @sizeOf(protocol.Graphics)) return error.InvalidData;
 
         var has_static = true;
         var static_mem = core.transport.mmap.SharedMemory.open(.{
@@ -193,7 +191,7 @@ test "connect handles available or missing shared memory" {
         var c = client;
         c.deinit();
     } else |err| switch (err) {
-        error.NotFound, error.MapFailed, error.InvalidData => {},
+        error.NotFound, error.MapFailed => {},
         else => return err,
     }
 }
