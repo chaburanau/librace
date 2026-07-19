@@ -9,7 +9,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Shape | Simulators | How you read data |
 |-------|------------|-------------------|
 | **Dynamic snapshots** | iRacing | Lazy variable-header snapshots, indexed values, and an owned typed session tree |
-| **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6 | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()`, etc.); string helpers on `protocol` structs |
+| **Fixed structs** | AC, ACC, ACE, ACR, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
 
 The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from protocol layouts or snapshots.
 
@@ -24,6 +24,7 @@ The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — ca
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | **Implemented** |
 | Forza Horizon 6 (FH6) | `librace.simulators.fh6` | UDP | **Implemented** |
+| RaceRoom Racing Experience (R3E) | `librace.simulators.r3e` | Shared memory | **Implemented** |
 
 More titles will be added over time.
 
@@ -68,6 +69,7 @@ zig build dashboard -Dsim=ace
 zig build dashboard -Dsim=acr
 zig build dashboard -Dsim=lmu
 zig build dashboard -Dsim=fh6
+zig build dashboard -Dsim=r3e
 
 # Or use the per-sim run step directly:
 zig build run-dashboard-ac
@@ -101,6 +103,7 @@ Stub simulators print `FAIL not_implemented short_name=<name>` and exit with cod
 | ACR | `run-acr` |
 | LMU | `run-lmu` |
 | FH6 | `run-fh6` |
+| R3E | `run-r3e` |
 
 Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name>`).
 
@@ -294,6 +297,36 @@ while (client.poll() == .ok) {
     _ = .{ speed_kmh, rpm, tc, s.current_et, track };
 }
 ```
+
+### RaceRoom Racing Experience
+
+R3E exposes a single packed shared-memory region (`$R3E`, official API major 3 / minor 5). The client
+copies the player/session core on each `poll()`; the 128-entry driver grid is loaded only when
+`drivers()` is called:
+
+```zig
+const r3e = librace.simulators.r3e;
+
+var client = try r3e.connect(allocator, io, .{});
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const s = client.shared();
+
+    const speed_kmh = s.speedKmh();
+    const rpm = s.engineRpm();
+    const track = s.trackName();
+    const car = s.vehicle_info.nameUtf8();
+    _ = .{ speed_kmh, rpm, track, car };
+
+    // Optional: competitor grid (copied on demand after each poll)
+    const grid = client.drivers();
+    _ = grid;
+}
+```
+
+`connect` returns `error.NotFound` when RRRE is not running (no `$R3E` mapping) and
+`error.VersionMismatch` if the major version is incompatible.
 
 ### Forza Horizon 6
 

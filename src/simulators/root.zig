@@ -5,3 +5,4 @@ pub const acr = @import("acr/root.zig");
 pub const fh6 = @import("fh6/root.zig");
 pub const iracing = @import("iracing/root.zig");
 pub const lmu = @import("lmu/root.zig");
+pub const r3e = @import("r3e/root.zig");

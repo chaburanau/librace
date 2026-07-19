@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
         "acr",
         "fh6",
         "lmu",
+        "r3e",
     };
 
     for (simulators) |sim| {
@@ -48,7 +49,7 @@ pub fn build(b: *std.Build) void {
         }
     }
     if (!dashboard_sim_valid) {
-        std.debug.panic("unknown simulator '{s}' — expected one of: iracing, ac, acc, ace, acr, fh6, lmu", .{dashboard_sim});
+        std.debug.panic("unknown simulator '{s}' — expected one of: iracing, ac, acc, ace, acr, fh6, lmu, r3e", .{dashboard_sim});
     }
 
     const dashboard_step = b.step(
@@ -115,7 +116,8 @@ fn addDashboardForSim(
     const is_acr = std.mem.eql(u8, sim, "acr");
     const is_fh6 = std.mem.eql(u8, sim, "fh6");
     const is_lmu = std.mem.eql(u8, sim, "lmu");
-    const implemented = is_iracing or is_ac or is_acc or is_ace or is_acr or is_fh6 or is_lmu;
+    const is_r3e = std.mem.eql(u8, sim, "r3e");
+    const implemented = is_iracing or is_ac or is_acc or is_ace or is_acr or is_fh6 or is_lmu or is_r3e;
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "short_name", sim);
@@ -192,5 +194,6 @@ fn simulatorDisplayName(short_name: []const u8) []const u8 {
     if (std.mem.eql(u8, short_name, "acr")) return "Assetto Corsa Rally";
     if (std.mem.eql(u8, short_name, "fh6")) return "Forza Horizon 6";
     if (std.mem.eql(u8, short_name, "lmu")) return "Le Mans Ultimate";
+    if (std.mem.eql(u8, short_name, "r3e")) return "RaceRoom Racing Experience";
     return short_name;
 }

@@ -18,4 +18,5 @@ test {
     std.testing.refAllDecls(simulators.acr);
     std.testing.refAllDecls(simulators.fh6);
     std.testing.refAllDecls(simulators.lmu);
+    std.testing.refAllDecls(simulators.r3e);
 }
