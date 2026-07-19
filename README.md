@@ -9,7 +9,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Shape | Simulators | How you read data |
 |-------|------------|-------------------|
 | **Dynamic snapshots** | iRacing | Lazy variable-header snapshots, indexed values, and an owned typed session tree |
-| **Fixed structs** | AC, ACC, ACE, ACR, AMS2, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
+| **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
 
 The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from protocol layouts or snapshots.
 
@@ -22,6 +22,7 @@ The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — ca
 | Assetto Corsa Competizione (ACC) | `librace.simulators.acc` | Shared memory | **Implemented** |
 | Assetto Corsa Evo (ACE) | `librace.simulators.ace` | Shared memory | **Implemented** |
 | Assetto Corsa Rally (ACR) | `librace.simulators.acr` | Shared memory | **Implemented** |
+| Automobilista (AMS) | `librace.simulators.ams` | Shared memory | **Implemented** |
 | Automobilista 2 (AMS2) | `librace.simulators.ams2` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | **Implemented** |
 | Forza Horizon 6 (FH6) | `librace.simulators.fh6` | UDP | **Implemented** |
@@ -68,6 +69,7 @@ zig build dashboard -Dsim=ac
 zig build dashboard -Dsim=acc
 zig build dashboard -Dsim=ace
 zig build dashboard -Dsim=acr
+zig build dashboard -Dsim=ams
 zig build dashboard -Dsim=ams2
 zig build dashboard -Dsim=lmu
 zig build dashboard -Dsim=fh6
@@ -103,6 +105,7 @@ Stub simulators print `FAIL not_implemented short_name=<name>` and exit with cod
 | ACC | `run-acc` |
 | ACE | `run-ace` |
 | ACR | `run-acr` |
+| AMS | `run-ams` |
 | AMS2 | `run-ams2` |
 | LMU | `run-lmu` |
 | FH6 | `run-fh6` |
@@ -300,6 +303,33 @@ while (client.poll() == .ok) {
     _ = .{ speed_kmh, rpm, tc, s.current_et, track };
 }
 ```
+
+### Automobilista
+
+Automobilista exposes the Project CARS 1 shared-memory region (`$pcars$`, SHARED_MEMORY_VERSION 5).
+Enable shared memory in the game's hardware / system options. Hot `poll()` copies player/session
+fields with a version/speed/rpm consistency check (pCars1 has no sequence number); the participant
+grid loads only when `participants()` is called:
+
+```zig
+const ams = librace.simulators.ams;
+
+var client = try ams.connect(allocator, io, .{});
+defer client.deinit();
+
+while (client.poll() == .ok) {
+    const s = client.shared();
+
+    const speed_kmh = s.speedKmh();
+    const rpm = s.rpm;
+    const track = s.trackLocation();
+    const car = s.carName();
+    _ = .{ speed_kmh, rpm, track, car, client.participants() };
+}
+```
+
+`connect` returns `error.NotFound` when Automobilista is not running (no `$pcars$` mapping) and
+`error.VersionMismatch` if the layout version is incompatible.
 
 ### Automobilista 2
 
