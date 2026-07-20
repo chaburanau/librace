@@ -20,7 +20,16 @@ pub fn cstrToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
     return out[0..len];
 }
 
-/// Decode a UTF-16LE (`wchar_t`) buffer into `out` as UTF-8, truncating at the NUL terminator.
+/// Decode a NUL-terminated UTF-16LE code-unit slice into `out` as UTF-8.
+pub fn utf16ZToUtf8(wide: []const u16, out: []u8) ?[]const u8 {
+    var len: usize = 0;
+    while (len < wide.len and wide[len] != 0) : (len += 1) {}
+    if (len == 0) return out[0..0];
+    const written = std.unicode.utf16LeToUtf8(out, wide[0..len]) catch return null;
+    return out[0..written];
+}
+
+/// Decode a UTF-16LE (`wchar_t`) byte buffer into `out` as UTF-8, truncating at the NUL terminator.
 pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
     var units: [256]u16 = undefined;
     const max_units = @min(src_bytes.len / 2, units.len);
@@ -30,8 +39,7 @@ pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
         if (cu == 0) break;
         units[len] = cu;
     }
-    const written = std.unicode.utf16LeToUtf8(out, units[0..len]) catch return null;
-    return out[0..written];
+    return utf16ZToUtf8(units[0..len], out);
 }
 
 /// Decode a UTF-16LE struct field into `out` as UTF-8.
@@ -50,6 +58,12 @@ test "cstr helpers stop at NUL and validate UTF-8" {
     try std.testing.expectEqualStrings("Spa", cstr(&src));
     var out: [16]u8 = undefined;
     try std.testing.expectEqualStrings("Spa", cstrToUtf8(&src, &out).?);
+}
+
+test "utf16ZToUtf8 decodes a code-unit slice and stops at NUL" {
+    const wide = [_]u16{ 'a', 'c', 's', '.', 'e', 'x', 'e', 0, 'X' };
+    var out: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("acs.exe", utf16ZToUtf8(&wide, &out).?);
 }
 
 test "wcharToUtf8 decodes a UTF-16LE name and stops at NUL" {

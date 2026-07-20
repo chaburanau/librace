@@ -21,12 +21,16 @@ Do not add a shared `Telemetry { speed, gear, … }` struct to the SDK — calle
 
 ```
 src/
-  root.zig                 # Public API: re-exports core + simulators
+  root.zig                 # Public API: re-exports core + detect + simulators
   core/
     types.zig              # Cross-simulator enums and shared types
     transport/
       mmap.zig             # Shared-memory / memory-mapped file helpers
       udp.zig              # UDP listener helpers
+  detect/
+    root.zig               # detect() / isRunning() — process-scan helpers
+    signatures.zig         # Built-in exe basename table
+    process.zig            # Windows Toolhelp / OpenProcess helpers
   simulators/
     root.zig               # Re-exports all simulator modules
     <short-name>/
@@ -80,6 +84,17 @@ Simulators expose telemetry through one or more channels:
 Shared transport code lives in `src/core/transport/`. **Per-simulator byte layouts, field names, and connection lifecycle** live only in `src/simulators/<name>/`.
 
 Do not put simulator-specific struct layouts in `core/`.
+
+## Process detection (`librace.detect`)
+
+Lightweight Windows helpers to find which known sim **process** is running:
+
+```zig
+const d = librace.detect.detect(.{}) orelse return;
+_ = librace.detect.isRunning(d.pid);
+```
+
+`detect()` matches exe basenames exactly (case-insensitive) from a built-in table, plus any caller-supplied signatures appended via `Options`. `isRunning(pid)` is a non-blocking liveness check. This does **not** probe shared memory or UDP — use each title's `connect` timeouts/retries for telemetry readiness.
 
 ## SDK design philosophy
 

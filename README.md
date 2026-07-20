@@ -42,6 +42,7 @@ librace/
 ├── src/
 │   ├── root.zig              # Library entry point
 │   ├── core/                 # Shared types and transport helpers
+│   ├── detect/               # Process-based "which sim is running?" helpers
 │   └── simulators/           # One folder per simulator
 ├── examples/
 │   ├── common/               # Shared simple + dashboard runners
@@ -116,6 +117,25 @@ Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name
 ## Using the library
 
 Add librace as a dependency in your `build.zig.zon`, then import the module in your project.
+
+### Detect which simulator is running
+
+`librace.detect` scans processes for known game executables (no shared-memory or UDP probes). Use it to pick a simulator module; existing `connect` timeouts/retries still handle "running but not telemetry-ready."
+
+```zig
+const librace = @import("librace");
+const detect = librace.detect;
+
+const d = detect.detect(.{}) orelse return; // null if no known sim process
+// d.simulator, d.pid
+
+while (detect.isRunning(d.pid)) {
+    // poll your client; sleep between iterations
+}
+// process exited — call detect() again (do not reuse the old PID)
+```
+
+Pass `Options{ .signatures = your_table }` to append extra exe basenames after the built-ins. Matching is case-insensitive and exact (full basename).
 
 ### iRacing (dynamic telemetry)
 
