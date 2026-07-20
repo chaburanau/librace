@@ -3,17 +3,20 @@
 //! Import `librace.core` for shared types and transport helpers.
 //! Import `librace.simulators` (or a specific simulator module) for per-title APIs.
 //! Import `librace.detect` to find which known sim process is running.
+//! Import `librace.unified` for automatic lifecycle and normalized telemetry.
 
 const std = @import("std");
 
 pub const core = @import("core/root.zig");
 pub const detect = @import("detect/root.zig");
 pub const simulators = @import("simulators/root.zig");
+pub const unified = @import("unified/root.zig");
 
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(core);
     std.testing.refAllDecls(detect);
+    std.testing.refAllDecls(unified);
     std.testing.refAllDecls(simulators.iracing);
     std.testing.refAllDecls(simulators.ac);
     std.testing.refAllDecls(simulators.acc);

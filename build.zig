@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
     for (simulators) |sim| {
         addSimpleExample(b, mod, example_common, target, optimize, sim);
     }
+    addUnifiedExample(b, mod, target, optimize);
 
     var dashboard_run_cmds: [simulators.len]*std.Build.Step.Run = undefined;
     for (simulators, 0..) |sim, i| {
@@ -67,6 +68,32 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_mod_tests.step);
+}
+
+fn addUnifiedExample(
+    b: *std.Build,
+    mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const exe = b.addExecutable(.{
+        .name = "unified",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/unified/simple.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "librace", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(exe);
+
+    const run_step = b.step("run-unified", "Run the auto-detect unified telemetry example");
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
 }
 
 fn addSimpleExample(

@@ -11,7 +11,8 @@ librace is a Zig library that connects to racing games and simulators through wh
 | **Dynamic snapshots** | iRacing | Lazy variable-header snapshots, indexed values, and an owned typed session tree |
 | **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
 
-The SDK does not bake in a shared `Telemetry { speed, gear, … }` struct — callers read the fields they need from protocol layouts or snapshots.
+Native per-title APIs remain the complete telemetry surface. The optional `librace.unified`
+manager provides automatic detection/lifecycle handling and a small normalized common subset.
 
 ## Supported simulators
 
@@ -43,6 +44,7 @@ librace/
 │   ├── root.zig              # Library entry point
 │   ├── core/                 # Shared types and transport helpers
 │   ├── detect/               # Process-based "which sim is running?" helpers
+│   ├── unified/              # Auto lifecycle + normalized common snapshot
 │   └── simulators/           # One folder per simulator
 ├── examples/
 │   ├── common/               # Shared simple + dashboard runners
@@ -63,6 +65,9 @@ zig build
 
 # Simple smoke test (manual check while in a live session)
 zig build run-iracing
+
+# Auto-detect and print normalized telemetry
+zig build run-unified
 
 # Shared terminal dashboard — pick simulator at build time
 zig build dashboard -Dsim=iracing
@@ -117,6 +122,49 @@ Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name
 ## Using the library
 
 Add librace as a dependency in your `build.zig.zon`, then import the module in your project.
+
+### Unified automatic lifecycle
+
+`librace.unified.Manager` scans for supported simulator processes, connects when telemetry
+becomes ready, polls the active title, tears it down when it exits, and detects again. The
+caller drives `update()`; the manager creates no thread and performs no hidden sleep.
+
+```zig
+var manager = librace.unified.Manager.init(allocator, io, .{});
+defer manager.deinit();
+
+while (true) {
+    switch (try manager.update()) {
+        .updated, .unchanged => {
+            const sample = manager.snapshot().?;
+            _ = .{
+                sample.simulator,
+                sample.vehicle.speed_mps,
+                sample.vehicle.gear,
+                sample.identity.track,
+            };
+
+            // Full native telemetry remains available when needed.
+            if (manager.native()) |native| switch (native) {
+                .iracing => |client| _ = client.variables(),
+                else => {},
+            };
+        },
+        .idle, .waiting_for_telemetry, .stale, .disconnected => {},
+    }
+    try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(100), .real);
+}
+```
+
+Normalized fields are optional: `null` means that title does not expose a reliable equivalent.
+Units are m/s, RPM, liters, seconds, radians, and normalized `0...1` pedal inputs. Gears use
+`-1` for reverse, `0` for neutral, and `1+` for forward gears. Identity strings borrow
+manager-owned buffers and remain valid until the next `update()` or `deinit()`.
+
+Options include extra process signatures, shared-memory connection timing, iRacing stale
+timeout, and FH6 bind/poll settings. Retryable “process running, telemetry not ready” failures
+produce `.waiting_for_telemetry`; configuration, version, allocation, and cancellation failures
+are returned as errors.
 
 ### Detect which simulator is running
 

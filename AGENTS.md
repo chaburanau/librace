@@ -15,13 +15,15 @@ Each simulator uses different transports and data layouts. This library abstract
 | **Dynamic snapshots** | iRacing | Allocation-free variable handles, owned telemetry rows, and lazy session queries |
 | **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E | Typed snapshots (`physics()`, `telemetry()`, `packet()`, `shared()`, …); string helpers on `protocol` structs |
 
-Do not add a shared `Telemetry { speed, gear, … }` struct to the SDK — callers read what they need from native layouts or snapshots.
+Native layouts and snapshots remain the complete APIs. The opt-in `librace.unified` manager
+exposes a deliberately small normalized subset with optional fields and native-client escape
+hatches.
 
 ## Repository layout
 
 ```
 src/
-  root.zig                 # Public API: re-exports core + detect + simulators
+  root.zig                 # Public API: re-exports core + detect + unified + simulators
   core/
     types.zig              # Cross-simulator enums and shared types
     transport/
@@ -31,6 +33,10 @@ src/
     root.zig               # detect() / isRunning() — process-scan helpers
     signatures.zig         # Built-in exe basename table
     process.zig            # Windows Toolhelp / OpenProcess helpers
+  unified/
+    root.zig               # Public normalized types and manager exports
+    manager.zig            # Detection-driven lifecycle + native tagged union
+    adapters.zig           # Per-title normalized common-subset mappings
   simulators/
     root.zig               # Re-exports all simulator modules
     <short-name>/
@@ -96,11 +102,24 @@ _ = librace.detect.isRunning(d.pid);
 
 `detect()` matches exe basenames exactly (case-insensitive) from a built-in table, plus any caller-supplied signatures appended via `Options`. `isRunning(pid)` is a non-blocking liveness check. This does **not** probe shared memory or UDP — use each title's `connect` timeouts/retries for telemetry readiness.
 
+## Unified lifecycle (`librace.unified`)
+
+`Manager.update()` is a caller-driven state machine: detect, connect, poll, normalize, tear down,
+and detect again. It must not create a background thread or sleep implicitly. Keep mappings
+explicit in `src/unified/adapters.zig`, use canonical units, represent unavailable fields as
+`null`, and copy normalized strings into manager-owned buffers. iRacing variable handles are
+cached by catalog version and session metadata is refreshed only when its version changes.
+
+Every new `detect.Simulator` variant must be added to the manager client/native unions, lifecycle
+switches, and normalized adapters.
+
 ## SDK design philosophy
 
 When implementing any simulator module:
 
-1. **Do not assume** what callers need — avoid opinionated structs that pre-parse a fixed field set (no `Telemetry { speed, gear, … }` in the SDK).
+1. **Keep native APIs complete** — do not replace protocol snapshots with an opinionated fixed
+   field set. Add only reliable common fields to `unified.Snapshot`, make unavailable values
+   optional, and preserve native access.
 2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, AMS, AMS2, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
 3. **Provide discovery where it fits** — iRacing exposes a version-checked descriptor iterator with native IRSDK indices. Fixed-layout simulators export `field_count` (comptime protocol field total).
 4. **Provide constants sparingly** — `keys.zig` is for common iRacing map keys and variable names. Fixed-layout simulators use protocol struct field names directly.
@@ -332,6 +351,7 @@ Keep simulator-specific helpers out of `examples/common/` (e.g. connect-error te
 ```bash
 zig build test                      # Library unit tests
 zig build                           # Build all example binaries
+zig build run-unified               # Auto-detect normalized telemetry
 zig build run-<name>                # Simple smoke test
 zig build run-dashboard-<name>      # Real-time dashboard for one simulator
 zig build dashboard -Dsim=<name>    # Alias for run-dashboard-<name>
