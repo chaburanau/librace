@@ -13,6 +13,7 @@ const ace = simulators.ace;
 const acr = simulators.acr;
 const ams = simulators.ams;
 const ams2 = simulators.ams2;
+const beamng = simulators.beamng;
 const fh6 = simulators.fh6;
 const lmu = simulators.lmu;
 const r3e = simulators.r3e;
@@ -24,6 +25,8 @@ pub const UpdateError = iracing.ConnectError ||
     acr.ConnectError ||
     ams.ConnectError ||
     ams2.ConnectError ||
+    beamng.ConnectError ||
+    beamng.PollError ||
     fh6.ConnectError ||
     fh6.PollError ||
     lmu.ConnectError ||
@@ -40,6 +43,7 @@ const Client = union(detect.Simulator) {
     lmu: lmu.Client,
     fh6: fh6.Client,
     r3e: r3e.Client,
+    beamng: beamng.Client,
 };
 
 /// Pointer to the active concrete client. The pointer is invalidated by the
@@ -55,6 +59,7 @@ pub const NativeClient = union(detect.Simulator) {
     lmu: *lmu.Client,
     fh6: *fh6.Client,
     r3e: *r3e.Client,
+    beamng: *beamng.Client,
 };
 
 pub const Manager = struct {
@@ -85,7 +90,7 @@ pub const Manager = struct {
     /// Advances detection, connection, polling, normalization, and teardown.
     ///
     /// This function never sleeps on its own. Shared-memory connection waits
-    /// and the FH6 receive deadline are controlled through `Options`.
+    /// and UDP receive deadlines are controlled through `Options`.
     pub fn update(self: *Manager) UpdateError!types.UpdateStatus {
         if (self.client != null) {
             const current = self.detection orelse unreachable;
@@ -159,6 +164,7 @@ pub const Manager = struct {
             .lmu => self.client = .{ .lmu = lmu.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
             .fh6 => self.client = .{ .fh6 = fh6.connect(self.io, .{ .config = self.options.fh6_config }) catch |err| return self.connectFailure(err) },
             .r3e => self.client = .{ .r3e = r3e.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
+            .beamng => self.client = .{ .beamng = beamng.connect(self.io, .{ .config = self.options.beamng_config }) catch |err| return self.connectFailure(err) },
         }
         self.normalized.resetClient();
         self.has_snapshot = false;
@@ -197,6 +203,11 @@ pub const Manager = struct {
                     .disconnected => self.didDisconnect(),
                 },
                 .r3e => |*value| self.pollFixed(current, value.poll(), adapters.normalizeR3e, value),
+                .beamng => |*value| switch (try value.poll(self.io, self.options.beamng_poll_timeout)) {
+                    .ok => self.didUpdate(current, adapters.normalizeBeamng(&self.normalized, value)),
+                    .stale => .stale,
+                    .disconnected => self.didDisconnect(),
+                },
             };
         }
         unreachable;
@@ -233,6 +244,7 @@ pub const Manager = struct {
         if (self.client) |*client| {
             switch (client.*) {
                 .fh6 => |*value| value.deinit(self.io),
+                .beamng => |*value| value.deinit(self.io),
                 inline else => |*value| value.deinit(),
             }
             self.client = null;

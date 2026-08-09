@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const detect = @import("../detect/root.zig");
+const beamng = @import("../simulators/beamng/root.zig");
 const fh6 = @import("../simulators/fh6/root.zig");
 
 pub const UpdateStatus = enum {
@@ -34,6 +35,11 @@ pub const Options = struct {
     iracing_stale_timeout: ?std.Io.Duration = std.Io.Duration.fromSeconds(30),
     fh6_config: fh6.Config = .{},
     fh6_poll_timeout: std.Io.Timeout = .{ .duration = .{
+        .raw = std.Io.Duration.fromMilliseconds(100),
+        .clock = .awake,
+    } },
+    beamng_config: beamng.Config = .{},
+    beamng_poll_timeout: std.Io.Timeout = .{ .duration = .{
         .raw = std.Io.Duration.fromMilliseconds(100),
         .clock = .awake,
     } },

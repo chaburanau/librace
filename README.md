@@ -9,7 +9,7 @@ librace is a Zig library that connects to racing games and simulators through wh
 | Shape | Simulators | How you read data |
 |-------|------------|-------------------|
 | **Dynamic snapshots** | iRacing | Lazy variable-header snapshots, indexed values, and an owned typed session tree |
-| **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
+| **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, BeamNG, LMU, FH6, R3E | Typed snapshots mirroring the wire format (`physics()` / `telemetry()` / `packet()` / `shared()`, etc.); string helpers on `protocol` structs |
 
 Native per-title APIs remain the complete telemetry surface. The optional `librace.unified`
 manager provides automatic detection/lifecycle handling and a small normalized common subset.
@@ -26,6 +26,7 @@ manager provides automatic detection/lifecycle handling and a small normalized c
 | Automobilista (AMS) | `librace.simulators.ams` | Shared memory | **Implemented** |
 | Automobilista 2 (AMS2) | `librace.simulators.ams2` | Shared memory | **Implemented** |
 | Le Mans Ultimate (LMU) | `librace.simulators.lmu` | Shared memory | **Implemented** |
+| BeamNG.drive | `librace.simulators.beamng` | UDP (OutGauge) | **Implemented** |
 | Forza Horizon 6 (FH6) | `librace.simulators.fh6` | UDP | **Implemented** |
 | RaceRoom Racing Experience (R3E) | `librace.simulators.r3e` | Shared memory | **Implemented** |
 
@@ -34,7 +35,7 @@ More titles will be added over time.
 ## Requirements
 
 - Zig 0.16.0 or newer
-- Windows (shared-memory simulators today; FH6 UDP listener also targets Windows workflows)
+- Windows (shared-memory simulators today; BeamNG / FH6 UDP listeners also target Windows workflows)
 
 ## Project layout
 
@@ -78,6 +79,7 @@ zig build dashboard -Dsim=acr
 zig build dashboard -Dsim=ams
 zig build dashboard -Dsim=ams2
 zig build dashboard -Dsim=lmu
+zig build dashboard -Dsim=beamng
 zig build dashboard -Dsim=fh6
 zig build dashboard -Dsim=r3e
 
@@ -114,6 +116,7 @@ Stub simulators print `FAIL not_implemented short_name=<name>` and exit with cod
 | AMS | `run-ams` |
 | AMS2 | `run-ams2` |
 | LMU | `run-lmu` |
+| BeamNG | `run-beamng` |
 | FH6 | `run-fh6` |
 | R3E | `run-r3e` |
 
@@ -458,6 +461,31 @@ while (client.poll() == .ok) {
 
 `connect` returns `error.NotFound` when RRRE is not running (no `$R3E` mapping) and
 `error.VersionMismatch` if the major version is incompatible.
+
+### BeamNG.drive
+
+BeamNG broadcasts LFS-compatible **OutGauge** UDP datagrams (92 bytes, or 96 with optional ID). Enable **Options → Other → Protocols → OutGauge UDP** (default port `4444`). Disable MotionSim on the same port so its `"BNG1"` packets do not compete. `connect` binds the local UDP port immediately; the timeout passed to `poll` controls how long to wait for telemetry.
+
+```zig
+const beamng = librace.simulators.beamng;
+
+var client = try beamng.connect(io, .{});
+defer client.deinit(io);
+
+const poll_timeout: std.Io.Timeout = .{ .duration = .{
+    .raw = std.Io.Duration.fromMilliseconds(500),
+    .clock = .awake,
+} };
+while (try client.poll(io, poll_timeout) == .ok) {
+    const p = client.packet();
+
+    const speed_kmh = p.speedKmh();
+    const rpm = p.rpm;
+    const gear = p.displayGear();
+    const car = p.carName(); // BeamNG hardcodes "beam"
+    _ = .{ speed_kmh, rpm, gear, car };
+}
+```
 
 ### Forza Horizon 6
 

@@ -13,7 +13,7 @@ Each simulator uses different transports and data layouts. This library abstract
 | Shape | Simulators | Primary access |
 |-------|------------|----------------|
 | **Dynamic snapshots** | iRacing | Allocation-free variable handles, owned telemetry rows, and lazy session queries |
-| **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E | Typed snapshots (`physics()`, `telemetry()`, `packet()`, `shared()`, …); string helpers on `protocol` structs |
+| **Fixed structs** | AC, ACC, ACE, ACR, AMS, AMS2, BeamNG, LMU, FH6, R3E | Typed snapshots (`physics()`, `telemetry()`, `packet()`, `shared()`, …); string helpers on `protocol` structs |
 
 Native layouts and snapshots remain the complete APIs. The opt-in `librace.unified` manager
 exposes a deliberately small normalized subset with optional fields and native-client escape
@@ -73,6 +73,7 @@ build.zig.zon
 | `ams` | Automobilista |
 | `ams2` | Automobilista 2 |
 | `lmu` | Le Mans Ultimate |
+| `beamng` | BeamNG.drive |
 | `fh6` | Forza Horizon 6 |
 | `r3e` | RaceRoom Racing Experience |
 
@@ -83,7 +84,7 @@ When adding a new title, use a short lowercase folder name and add it to `src/si
 Simulators expose telemetry through one or more channels:
 
 - **Memory-mapped / shared memory** — iRacing (`Local\IRSDKMemMapFileName`), AC family physics SDK layouts (`acpmf_*`), LMU native (`LMU_Data`), RaceRoom (`$R3E`), Automobilista (`$pcars$`), Automobilista 2 (`$pcars2$`), rF2-family plugin buffers.
-- **UDP** — FH6 Data Out (324-byte dash packet on a configurable port; default `20066`).
+- **UDP** — FH6 Data Out (324-byte dash packet on a configurable port; default `20066`); BeamNG OutGauge (LFS-compatible 92/96-byte datagram; default port `4444`).
 - **Hybrid** — some titles use both; implement whichever channel is needed for complete data.
 - **Custom** — reserve `TransportKind.custom` for WebSocket, TCP, or proprietary APIs.
 
@@ -120,7 +121,7 @@ When implementing any simulator module:
 1. **Keep native APIs complete** — do not replace protocol snapshots with an opinionated fixed
    field set. Add only reliable common fields to `unified.Snapshot`, make unavailable values
    optional, and preserve native access.
-2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, AMS, AMS2, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
+2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, AMS, AMS2, BeamNG, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
 3. **Provide discovery where it fits** — iRacing exposes a version-checked descriptor iterator with native IRSDK indices. Fixed-layout simulators export `field_count` (comptime protocol field total).
 4. **Provide constants sparingly** — `keys.zig` is for common iRacing map keys and variable names. Fixed-layout simulators use protocol struct field names directly.
 5. **Keep parsing minimal** — decode types and copy rows from shared memory or UDP; let callers build higher-level models in their own code.
@@ -305,7 +306,7 @@ while (client.poll() == .ok) {
 `connect` returns `error.NotFound` when AMS2 is not running (or Shared Memory is not set to
 **Project CARS 2**) and `error.VersionMismatch` on an incompatible layout version.
 
-### Fixed-struct simulators (ACC, ACE, ACR, AMS, AMS2, LMU, FH6, R3E)
+### Fixed-struct simulators (ACC, ACE, ACR, AMS, AMS2, BeamNG, LMU, FH6, R3E)
 
 Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `keys.zig`, or generic
 `getAs`/`resolve`/`read` helpers.
@@ -318,10 +319,11 @@ Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `k
 | AMS | `shared()`, optional `participants()` | `trackLocation()`, `carName()`, `playerName()`, `nameUtf8` on `ParticipantInfo` (UTF-8); `speedKmh()` on `Shared` |
 | AMS2 | `shared()`, optional `participants()` | `trackLocation()`, `carName()`, `playerName()`, `nameUtf8` on `ParticipantInfo` (UTF-8); `speedKmh()` on `Shared` |
 | LMU | `telemetry()`, `session()`, `vehicle()` | `trackNameUtf8`, `vehicleNameUtf8`, `driverNameUtf8` (ANSI) |
+| BeamNG | `packet()` | `carName()`, `display1Text()`, `display2Text()`, `speedKmh()`, `displayGear()` on the OutGauge packet struct |
 | FH6 | `packet()` | `speedKmh()`, `displayGear()`, `formatCarSummary()` on the UDP packet struct |
 | R3E | `shared()`, optional `drivers()` | `trackName()`, `layoutName()`, `playerName()`, `nameUtf8` on `DriverInfo` (UTF-8); `speedKmh()` / `engineRpm()` on `Shared` |
 
-Each module re-exports `field_count` from `root.zig`. FH6 passes `std.Io` into `poll()` and accepts
+Each module re-exports `field_count` from `root.zig`. BeamNG and FH6 pass `std.Io` into `poll()` and accept
 `std.Io.Timeout` because telemetry arrives over UDP rather than shared memory.
 
 ## Examples
@@ -357,7 +359,7 @@ zig build run-dashboard-<name>      # Real-time dashboard for one simulator
 zig build dashboard -Dsim=<name>    # Alias for run-dashboard-<name>
 ```
 
-Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `ams`, `ams2`, `lmu`, `fh6`, `r3e`.
+Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `ams`, `ams2`, `beamng`, `lmu`, `fh6`, `r3e`.
 
 Binaries: `zig-out/bin/<name>` (simple), `zig-out/bin/dashboard-<name>` (dashboard).
 
@@ -406,6 +408,7 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 | `acr` | **Implemented** — classic AC three-page shared memory (`acpmf_*`), `wchar_t`/UTF-16 strings, typed struct snapshots with wstring helpers, live poll (physics-`packetId` liveness; graphics page mostly unpopulated by the title) |
 | `acc` | **Implemented** — ACC three-page shared memory (`acpmf_*`), ACC v1.8.12 struct layout, `wchar_t`/UTF-16 strings, typed struct snapshots with wstring helpers, live poll |
 | `lmu` | **Implemented** — native S397 shared memory (`LMU_Data`), player telemetry/session/scoring snapshots, ANSI strings with decode helpers on protocol structs, live poll |
+| `beamng` | **Implemented** — OutGauge UDP (LFS-compatible 92/96-byte packet, default port 4444), typed `packet()` snapshot access, live poll |
 | `fh6` | **Implemented** — UDP Data Out (324-byte Horizon dash packet), typed `packet()` snapshot access, live poll |
 | `ams` | **Implemented** — Project CARS 1 `$pcars$` shared memory (SHARED_MEMORY_VERSION 5), typed `shared()` snapshot with on-demand `participants()`, UTF-8 string helpers, live poll |
 | `ams2` | **Implemented** — official `$pcars2$` shared memory (SHARED_MEMORY_VERSION 14), typed `shared()` snapshot with on-demand `participants()`, UTF-8 string helpers, live poll |

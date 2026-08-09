@@ -15,6 +15,7 @@ pub const Simulator = enum {
     lmu,
     fh6,
     r3e,
+    beamng,
 };
 
 pub const Signature = struct {
@@ -39,4 +40,8 @@ pub const builtin: []const Signature = &.{
     .{ .simulator = .fh6, .exe_name = "ForzaHorizon6.exe" },
     .{ .simulator = .r3e, .exe_name = "RRRE.exe" },
     .{ .simulator = .r3e, .exe_name = "RRRE64.exe" },
+    .{ .simulator = .beamng, .exe_name = "BeamNG.drive.exe" },
+    .{ .simulator = .beamng, .exe_name = "BeamNG.drive.x64.exe" },
+    .{ .simulator = .beamng, .exe_name = "BeamNG.tech.exe" },
+    .{ .simulator = .beamng, .exe_name = "BeamNG.tech.x64.exe" },
 };

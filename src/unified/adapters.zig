@@ -416,6 +416,26 @@ pub fn normalizeFh6(state: *State, client: *sims.fh6.Client) bool {
     return true;
 }
 
+pub fn normalizeBeamng(state: *State, client: *sims.beamng.Client) bool {
+    state.clear();
+    const p = client.packet();
+    state.setCar(p.carName());
+    state.data.vehicle = .{
+        .speed_mps = p.speed,
+        .gear = safeGear(p.displayGear()),
+        .engine_rpm = p.rpm,
+    };
+    state.data.controls = .{
+        .throttle = optionalUnit(p.throttle),
+        .brake = optionalUnit(p.brake),
+        .clutch = optionalUnit(p.clutch),
+    };
+    state.data.session = .{
+        .state = .active,
+    };
+    return true;
+}
+
 pub fn normalizeIracing(state: *State, client: *sims.iracing.Client) bool {
     refreshIracing(state, client) catch return false;
     state.clearData();
@@ -687,4 +707,21 @@ test "FH6 protocol fixture normalizes inputs" {
     const sample = state.snapshot(.fh6, 8);
     try std.testing.expectApproxEqAbs(@as(f32, 50), sample.vehicle.speed_mps.?, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1), sample.controls.throttle.?, 0.001);
+}
+
+test "BeamNG OutGauge fixture normalizes inputs" {
+    var client: sims.beamng.Client = .{ .listener = undefined };
+    client.snapshot.speed = 40;
+    client.snapshot.gear = 3;
+    client.snapshot.throttle = 0.75;
+    client.snapshot.brake = 0.25;
+    client.snapshot.rpm = 3500;
+    var state = State.init(std.testing.allocator);
+    defer state.deinit();
+    try std.testing.expect(normalizeBeamng(&state, &client));
+    const sample = state.snapshot(.beamng, 9);
+    try std.testing.expectApproxEqAbs(@as(f32, 40), sample.vehicle.speed_mps.?, 0.001);
+    try std.testing.expectEqual(@as(?i8, 2), sample.vehicle.gear);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), sample.controls.throttle.?, 0.001);
+    try std.testing.expectEqualStrings("beam", sample.identity.car.?);
 }

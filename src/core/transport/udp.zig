@@ -39,6 +39,12 @@ pub const UdpListener = struct {
 
     /// Receives a datagram according to `timeout`. Payload is written into
     /// `buffer`; the returned slice aliases `buffer`.
+    ///
+    /// TODO: On Windows, Zig 0.16 `Socket.receiveTimeout` currently returns
+    /// `error.ConcurrencyUnavailable` for UDP (datagram receives are not wired
+    /// into overlapped batch waits yet). Callers that need a deadline today use
+    /// blocking `socket.receive` instead. Switch them back to this timed path
+    /// once std supports it.
     pub fn recv(
         self: *const UdpListener,
         io: std.Io,

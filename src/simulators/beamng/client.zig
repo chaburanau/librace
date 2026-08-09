@@ -1,5 +1,5 @@
-//! Forza Horizon 6 client: binds a UDP listener and exposes typed access to the latest
-//! 324-byte Data Out packet via `packet()`.
+//! BeamNG.drive client: binds a UDP listener and exposes typed access to the
+//! latest OutGauge packet via `packet()`.
 
 const std = @import("std");
 const core = @import("../../core/root.zig");
@@ -29,8 +29,9 @@ pub const ConnectOptions = struct {
 
 pub const Client = struct {
     listener: core.transport.udp.UdpListener,
-    snapshot: protocol.DashPacket = .{},
-    recv_buf: [protocol.packet_size]u8 = undefined,
+    snapshot: protocol.OutGaugePacket = .{},
+    /// Slightly larger than OutGauge so MotionSim / other shared-port traffic can be received and skipped.
+    recv_buf: [256]u8 = undefined,
 
     pub fn connect(io: std.Io, config: Config) ConnectError!Client {
         var listener = try core.transport.udp.UdpListener.open(io, .{
@@ -48,7 +49,8 @@ pub const Client = struct {
         self.listener.close(io);
     }
 
-    /// Receives until a valid datagram arrives, then copies it into the snapshot.
+    /// Receives until a valid OutGauge datagram arrives, then copies it into
+    /// the snapshot.
     ///
     /// `timeout` is currently unused: Zig 0.16 `receiveTimeout` returns
     /// `ConcurrencyUnavailable` for UDP on Windows. Use blocking receive for
@@ -65,7 +67,7 @@ pub const Client = struct {
         }
     }
 
-    pub fn packet(self: *const Client) *const protocol.DashPacket {
+    pub fn packet(self: *const Client) *const protocol.OutGaugePacket {
         return &self.snapshot;
     }
 };
@@ -75,11 +77,11 @@ test "typed packet snapshot access" {
         .listener = undefined,
     };
     client.snapshot.speed = 50;
-    client.snapshot.current_engine_rpm = 7200;
+    client.snapshot.rpm = 7200;
     client.snapshot.gear = 5;
 
     try std.testing.expectApproxEqAbs(@as(f32, 50), client.packet().speed, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 180), client.packet().speedKmh(), 0.001);
-    try std.testing.expectEqual(@as(f32, 7200), client.packet().current_engine_rpm);
+    try std.testing.expectEqual(@as(f32, 7200), client.packet().rpm);
     try std.testing.expectEqual(@as(i32, 4), client.packet().displayGear());
 }
