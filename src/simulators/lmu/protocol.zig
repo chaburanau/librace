@@ -11,7 +11,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 pub const mem_map_name = "LMU_Data";
 pub const data_event_name = "LMU_Data_Event";
@@ -328,11 +327,11 @@ pub const TelemInfoV01 = extern struct {
     }
 
     pub fn vehicleNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.vehicle_name, out);
+        return strings.cStringToUtf8(&self.vehicle_name, out);
     }
 
     pub fn trackNameUtf8(self: *const TelemInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.track_name, out);
+        return strings.cStringToUtf8(&self.track_name, out);
     }
 };
 
@@ -400,11 +399,11 @@ pub const VehicleScoringInfoV01 = extern struct {
     }
 
     pub fn driverNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.driver_name, out);
+        return strings.cStringToUtf8(&self.driver_name, out);
     }
 
     pub fn vehicleNameUtf8(self: *const VehicleScoringInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.vehicle_name, out);
+        return strings.cStringToUtf8(&self.vehicle_name, out);
     }
 };
 
@@ -459,11 +458,11 @@ pub const ScoringInfoV01 = extern struct {
     }
 
     pub fn trackNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.track_name, out);
+        return strings.cStringToUtf8(&self.track_name, out);
     }
 
     pub fn playerNameUtf8(self: *const ScoringInfoV01, out: []u8) ?[]const u8 {
-        return strings.cstrToUtf8(&self.player_name, out);
+        return strings.cStringToUtf8(&self.player_name, out);
     }
 };
 
@@ -524,8 +523,6 @@ pub const telemetry_info_offset = telemetry_offset + @offsetOf(SharedMemoryTelem
 pub const scoring_offset = @offsetOf(SharedMemoryObjectOut, "scoring");
 pub const scoring_info_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "scoring_info");
 pub const vehicle_scoring_offset = scoring_offset + @offsetOf(SharedMemoryScoringData, "veh_scoring_info");
-
-pub const field_count = comptime_util.sumStructFieldCounts(&.{ TelemInfoV01, ScoringInfoV01, VehicleScoringInfoV01 });
 
 pub fn readActiveVehicles(view: []const u8) ?u8 {
     const offset = telemetry_offset + @offsetOf(SharedMemoryTelemetryData, "active_vehicles");

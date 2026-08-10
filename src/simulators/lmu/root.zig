@@ -22,7 +22,6 @@ pub const VehicleScoringInfoV01 = protocol.VehicleScoringInfoV01;
 
 pub const mem_map_name = protocol.mem_map_name;
 pub const data_event_name = protocol.data_event_name;
-pub const field_count = protocol.field_count;
 
 pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
     return Client.connect(allocator);

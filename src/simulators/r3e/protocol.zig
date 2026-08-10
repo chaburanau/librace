@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 pub const mem_map_name = "$R3E";
 
@@ -639,8 +638,6 @@ pub const Shared = extern struct {
         return self.gear;
     }
 };
-
-pub const field_count = comptime_util.structFieldCount(Shared);
 
 pub fn readVersionMajor(view: []const u8) ?i32 {
     if (view.len < 4) return null;

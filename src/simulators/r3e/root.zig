@@ -24,7 +24,6 @@ pub const DriverInfo = protocol.DriverInfo;
 pub const mem_map_name = protocol.mem_map_name;
 pub const version_major = protocol.version_major;
 pub const version_minor = protocol.version_minor;
-pub const field_count = protocol.field_count;
 pub const shared_size = protocol.shared_size;
 pub const shared_core_size = protocol.shared_core_size;
 

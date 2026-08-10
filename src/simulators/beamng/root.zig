@@ -25,7 +25,6 @@ pub const DashLight = protocol.DashLight;
 pub const default_port = protocol.default_port;
 pub const packet_size = protocol.packet_size;
 pub const packet_size_without_id = protocol.packet_size_without_id;
-pub const field_count = protocol.field_count;
 
 pub fn connect(io: std.Io, options: ConnectOptions) ConnectError!Client {
     return Client.connect(io, options.config);

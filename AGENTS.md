@@ -111,7 +111,7 @@ When implementing any simulator module:
    field set. Add only reliable common fields to `unified.Snapshot`, make unavailable values
    optional, and preserve native access.
 2. **Pick the right access model** — **iRacing**: allocation-free caller-cached variable handles, owned row values, and on-demand session queries. **Fixed-layout simulators** (AC family, AMS, AMS2, BeamNG, LMU, FH6, R3E): typed struct snapshots mirroring the wire format; string decode helpers live on `protocol` structs.
-3. **Provide discovery where it fits** — iRacing exposes a version-checked descriptor iterator with native IRSDK indices. Fixed-layout simulators export `field_count` (comptime protocol field total).
+3. **Provide discovery where it fits** — iRacing exposes a version-checked descriptor iterator with native IRSDK indices. Fixed-layout simulators rely on typed protocol structs instead.
 4. **Provide constants sparingly** — `keys.zig` is for common iRacing map keys and variable names. Fixed-layout simulators use protocol struct field names directly.
 5. **Keep parsing minimal** — decode types and copy rows from shared memory or UDP; let callers build higher-level models in their own code.
 
@@ -215,8 +215,7 @@ while (client.poll() == .ok) {
 }
 ```
 
-`poll()` returns a `PollStatus` (`ok` / `disconnected` / `stale`). `protocol.field_count` is a
-comptime total of struct fields across the three pages (for discovery-style display).
+`poll()` returns a `PollStatus` (`ok` / `disconnected` / `stale`).
 
 ### RaceRoom Racing Experience public API (implemented)
 
@@ -310,8 +309,8 @@ Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `k
 | FH6 | `packet()` | `speedKmh()`, `displayGear()`, `formatCarSummary()` on the UDP packet struct |
 | R3E | `shared()`, optional `drivers()` | `trackName()`, `layoutName()`, `playerName()`, `nameUtf8` on `DriverInfo` (UTF-8); `speedKmh()` / `engineRpm()` on `Shared` |
 
-Each module re-exports `field_count` from `root.zig`. BeamNG and FH6 pass `std.Io` into `poll()` and accept
-`std.Io.Timeout` because telemetry arrives over UDP rather than shared memory.
+BeamNG and FH6 pass `std.Io` into `poll()` and accept `std.Io.Timeout` because telemetry arrives
+over UDP rather than shared memory.
 
 ### Build commands
 

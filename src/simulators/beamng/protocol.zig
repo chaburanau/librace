@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Default listener port. Must match Options → Other → Protocols → OutGauge UDP port.
 pub const default_port: u16 = 4444;
@@ -136,8 +135,6 @@ pub const OutGaugePacket = extern struct {
         return strings.cString(&self.display2);
     }
 };
-
-pub const field_count = comptime_util.structFieldCount(OutGaugePacket);
 
 /// Copy `bytes` into `dest`. Accepts 92- or 96-byte OutGauge datagrams.
 pub fn decodePacket(bytes: []const u8, dest: *OutGaugePacket) bool {

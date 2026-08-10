@@ -446,8 +446,6 @@ while (try client.poll(io, poll_timeout) == .ok) {
 }
 ```
 
-Fixed-struct simulators also export `field_count` (comptime protocol field total) for discovery-style display.
-
 See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 
 ## License

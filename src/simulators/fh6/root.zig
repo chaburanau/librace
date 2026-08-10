@@ -24,7 +24,6 @@ pub const CarClass = protocol.CarClass;
 pub const DrivetrainType = protocol.DrivetrainType;
 pub const default_port = protocol.default_port;
 pub const packet_size = protocol.packet_size;
-pub const field_count = protocol.field_count;
 
 pub fn connect(io: std.Io, options: ConnectOptions) ConnectError!Client {
     return Client.connect(io, options.config);

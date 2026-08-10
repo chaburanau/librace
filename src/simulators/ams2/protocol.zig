@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 pub const mem_map_name = "$pcars2$";
 
@@ -406,7 +405,6 @@ pub const Shared = extern struct {
 
 pub const shared_size: usize = @sizeOf(Shared);
 pub const participant_info_size: usize = @sizeOf(ParticipantInfo);
-pub const field_count = comptime_util.structFieldCount(Shared);
 
 /// Prefix through `num_participants` (excludes the participant grid).
 pub const header_size: usize = @offsetOf(Shared, "participant_info");

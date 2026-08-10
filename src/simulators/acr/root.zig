@@ -27,7 +27,6 @@ pub const FlagType = protocol.FlagType;
 pub const physics_map_name = protocol.physics_map_name;
 pub const graphics_map_name = protocol.graphics_map_name;
 pub const static_map_name = protocol.static_map_name;
-pub const field_count = protocol.field_count;
 
 pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
     return Client.connect(allocator);

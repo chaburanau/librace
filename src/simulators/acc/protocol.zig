@@ -14,7 +14,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Windows named shared-memory tags. ACC intentionally uses the same tags as classic AC.
 pub const physics_map_name = "Local\\acpmf_physics";
@@ -357,11 +356,11 @@ pub const Graphics = extern struct {
     }
 
     pub fn tyreCompoundUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("tyre_compound", self, out);
+        return strings.wstringFieldToUtf8("tyre_compound", self, out);
     }
 
     pub fn trackStatusUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("track_status", self, out);
+        return strings.wstringFieldToUtf8("track_status", self, out);
     }
 };
 
@@ -414,31 +413,29 @@ pub const Static = extern struct {
     wet_tyres_name: [33]u16 = @splat(0),
 
     pub fn carModelUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("car_model", self, out);
+        return strings.wstringFieldToUtf8("car_model", self, out);
     }
 
     pub fn trackUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("track", self, out);
+        return strings.wstringFieldToUtf8("track", self, out);
     }
 
     pub fn playerNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("player_name", self, out);
+        return strings.wstringFieldToUtf8("player_name", self, out);
     }
 
     pub fn playerSurnameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("player_surname", self, out);
+        return strings.wstringFieldToUtf8("player_surname", self, out);
     }
 
     pub fn dryTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("dry_tyres_name", self, out);
+        return strings.wstringFieldToUtf8("dry_tyres_name", self, out);
     }
 
     pub fn wetTyresNameUtf8(self: *const Static, out: []u8) ?[]const u8 {
-        return strings.wstringFieldUtf8("wet_tyres_name", self, out);
+        return strings.wstringFieldToUtf8("wet_tyres_name", self, out);
     }
 };
-
-pub const field_count = comptime_util.sumStructFieldCounts(&.{ Physics, Graphics, Static });
 
 /// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
 pub fn readPacketId(view: []const u8) ?i32 {

@@ -22,7 +22,6 @@ pub const ParticipantInfo = protocol.ParticipantInfo;
 
 pub const mem_map_name = protocol.mem_map_name;
 pub const shared_memory_version = protocol.shared_memory_version;
-pub const field_count = protocol.field_count;
 pub const shared_size = protocol.shared_size;
 
 pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {

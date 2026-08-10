@@ -17,7 +17,6 @@
 
 const std = @import("std");
 const strings = @import("../../core/utils/strings.zig");
-const comptime_util = @import("../../core/utils/comptime.zig");
 
 /// Windows named shared-memory tags. The `Local\\` prefix selects the per-session namespace.
 pub const physics_map_name = "Local\\acevo_pmf_physics";
@@ -542,8 +541,6 @@ pub const Static = extern struct {
         return strings.cString(&self.track_configuration);
     }
 };
-
-pub const field_count = comptime_util.sumStructFieldCounts(&.{ Physics, Graphics, Static });
 
 /// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
 pub fn readPacketId(view: []const u8) ?i32 {

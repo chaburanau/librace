@@ -1,20 +1,15 @@
 const std = @import("std");
 
 /// Trim a fixed-size C char buffer to its NUL-terminated string slice.
+/// If no NUL is present, returns the entire buffer.
 pub fn cString(buf: []const u8) []const u8 {
     return std.mem.sliceTo(buf, 0);
 }
 
-/// Slice a fixed-size C char buffer at the first NUL, or through the end when none is present.
-pub fn cstr(buf: []const u8) []const u8 {
-    const end = std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
-    return buf[0..end];
-}
-
 /// Copy a NUL-terminated C string into `out` when it is valid UTF-8.
 /// Truncates on a codepoint boundary when `out` is shorter than the source.
-pub fn cstrToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
-    const s = cstr(src_bytes);
+pub fn cStringToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
+    const s = cString(src_bytes);
     if (!std.unicode.utf8ValidateSlice(s)) return null;
     var len: usize = 0;
     while (len < s.len) {
@@ -49,7 +44,7 @@ pub fn wcharToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
 }
 
 /// Decode a UTF-16LE struct field into `out` as UTF-8.
-pub fn wstringFieldUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
+pub fn wstringFieldToUtf8(comptime field: []const u8, self: anytype, out: []u8) ?[]const u8 {
     const value = @field(self, field);
     return wcharToUtf8(std.mem.asBytes(&value), out);
 }
@@ -59,18 +54,17 @@ test "cString trims at the NUL terminator" {
     try std.testing.expectEqualStrings("Spa", cString(&buf));
 }
 
-test "cstr helpers stop at NUL and validate UTF-8" {
+test "cStringToUtf8 stops at NUL and validates UTF-8" {
     const src = [_]u8{ 'S', 'p', 'a', 0, 'X' };
-    try std.testing.expectEqualStrings("Spa", cstr(&src));
     var out: [16]u8 = undefined;
-    try std.testing.expectEqualStrings("Spa", cstrToUtf8(&src, &out).?);
+    try std.testing.expectEqualStrings("Spa", cStringToUtf8(&src, &out).?);
 }
 
-test "cstrToUtf8 truncates on a UTF-8 codepoint boundary" {
+test "cStringToUtf8 truncates on a UTF-8 codepoint boundary" {
     // "é" is C3 A9; a 1-byte out buffer must not keep the lead byte alone.
     const src = [_]u8{ 'a', 0xC3, 0xA9, 0 };
     var out: [1]u8 = undefined;
-    try std.testing.expectEqualStrings("a", cstrToUtf8(&src, &out).?);
+    try std.testing.expectEqualStrings("a", cStringToUtf8(&src, &out).?);
 }
 
 test "utf16ZToUtf8 decodes a code-unit slice and stops at NUL" {
@@ -85,7 +79,7 @@ test "wcharToUtf8 decodes a UTF-16LE name and stops at NUL" {
     try std.testing.expectEqualStrings("Monza", wcharToUtf8(&src, &out).?);
 }
 
-test "wstringFieldUtf8 decodes UTF-16LE struct fields" {
+test "wstringFieldToUtf8 decodes UTF-16LE struct fields" {
     const Sample = extern struct {
         name: [33]u16 = @splat(0),
     };
@@ -95,5 +89,5 @@ test "wstringFieldUtf8 decodes UTF-16LE struct fields" {
     @memcpy(sample.name[0..car.len], car);
 
     var out: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("Ferrari 458", wstringFieldUtf8("name", &sample, &out).?);
+    try std.testing.expectEqualStrings("Ferrari 458", wstringFieldToUtf8("name", &sample, &out).?);
 }
