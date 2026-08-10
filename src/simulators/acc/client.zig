@@ -146,8 +146,7 @@ fn copyPage(comptime T: type, view: []const u8, dest: *T) bool {
         const end = protocol.readPacketId(view) orelse return false;
         if (begin == end) return true;
     }
-    @memcpy(std.mem.asBytes(dest), view[0..size]);
-    return true;
+    return false;
 }
 
 const builtin = @import("builtin");

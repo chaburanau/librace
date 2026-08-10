@@ -12,10 +12,16 @@ pub fn cstr(buf: []const u8) []const u8 {
 }
 
 /// Copy a NUL-terminated C string into `out` when it is valid UTF-8.
+/// Truncates on a codepoint boundary when `out` is shorter than the source.
 pub fn cstrToUtf8(src_bytes: []const u8, out: []u8) ?[]const u8 {
     const s = cstr(src_bytes);
     if (!std.unicode.utf8ValidateSlice(s)) return null;
-    const len = @min(s.len, out.len);
+    var len: usize = 0;
+    while (len < s.len) {
+        const n = std.unicode.utf8ByteSequenceLength(s[len]) catch break;
+        if (len + n > out.len) break;
+        len += n;
+    }
     @memcpy(out[0..len], s[0..len]);
     return out[0..len];
 }
@@ -58,6 +64,13 @@ test "cstr helpers stop at NUL and validate UTF-8" {
     try std.testing.expectEqualStrings("Spa", cstr(&src));
     var out: [16]u8 = undefined;
     try std.testing.expectEqualStrings("Spa", cstrToUtf8(&src, &out).?);
+}
+
+test "cstrToUtf8 truncates on a UTF-8 codepoint boundary" {
+    // "é" is C3 A9; a 1-byte out buffer must not keep the lead byte alone.
+    const src = [_]u8{ 'a', 0xC3, 0xA9, 0 };
+    var out: [1]u8 = undefined;
+    try std.testing.expectEqualStrings("a", cstrToUtf8(&src, &out).?);
 }
 
 test "utf16ZToUtf8 decodes a code-unit slice and stops at NUL" {

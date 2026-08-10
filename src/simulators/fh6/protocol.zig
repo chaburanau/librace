@@ -5,7 +5,7 @@
 //! Layout notes:
 //! - Fixed 324-byte little-endian datagram (Horizon dash format).
 //! - FH6 adds `car_group`, `smashable_vel_diff`, and `smashable_mass` after `num_cylinders`.
-//! - Gear encoding: 0 = reverse, 1 = neutral, 2+ = forward gears.
+//! - Gear encoding: 0 = reverse, 1–10 = forward gears, 11+ = neutral.
 //! - Speed is meters per second; inputs are 0–255 except steer/driving-line fields (S8).
 
 const std = @import("std");
@@ -166,8 +166,8 @@ pub const DashPacket = extern struct {
     pub fn displayGear(self: *const DashPacket) i32 {
         return switch (self.gear) {
             0 => -1,
-            1 => 0,
-            else => @as(i32, @intCast(self.gear)) - 1,
+            1...10 => @intCast(self.gear),
+            else => 0, // 11+ neutral
         };
     }
 
@@ -218,5 +218,5 @@ test "decodePacket copies a full datagram" {
     try std.testing.expectEqual(@as(u32, 42), pkt.timestamp_ms);
     try std.testing.expectApproxEqAbs(@as(f32, 6500), pkt.current_engine_rpm, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 199.8), pkt.speedKmh(), 0.1);
-    try std.testing.expectEqual(@as(i32, 3), pkt.displayGear());
+    try std.testing.expectEqual(@as(i32, 4), pkt.displayGear());
 }

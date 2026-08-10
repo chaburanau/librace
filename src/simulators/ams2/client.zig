@@ -79,8 +79,7 @@ pub const Client = struct {
     /// call after each successful `poll()`; skipped when unused.
     pub fn participants(self: *Client) []const protocol.ParticipantInfo {
         if (!self.participants_loaded) {
-            self.copyParticipants();
-            self.participants_loaded = true;
+            if (self.copyParticipants()) self.participants_loaded = true;
         }
         const n: usize = @intCast(@max(self.snap.num_participants, 0));
         return self.snap.participant_info[0..@min(n, protocol.stored_participants_max)];
@@ -111,22 +110,23 @@ pub const Client = struct {
         return false;
     }
 
-    fn copyParticipants(self: *Client) void {
+    fn copyParticipants(self: *Client) bool {
         const view = self.mem.view;
-        if (view.len < protocol.shared_size) return;
+        if (view.len < protocol.shared_size) return false;
 
         var attempts: u8 = 0;
         while (attempts < 4) : (attempts += 1) {
-            const seq_begin = protocol.readSequenceNumber(view) orelse return;
+            const seq_begin = protocol.readSequenceNumber(view) orelse return false;
             if (seq_begin % 2 != 0) continue;
 
             copyRange(self.snap, view, protocol.header_size, protocol.after_participants_offset);
             copyRange(self.snap, view, protocol.participant_timing_offset, protocol.after_timing_offset);
             copyRange(self.snap, view, protocol.participant_flags_offset, protocol.ams2_tail_offset);
 
-            const seq_end = protocol.readSequenceNumber(view) orelse return;
-            if (seq_begin == seq_end and seq_end % 2 == 0) return;
+            const seq_end = protocol.readSequenceNumber(view) orelse return false;
+            if (seq_begin == seq_end and seq_end % 2 == 0) return true;
         }
+        return false;
     }
 
     fn copyRange(snap: *protocol.Shared, view: []const u8, start: usize, end: usize) void {

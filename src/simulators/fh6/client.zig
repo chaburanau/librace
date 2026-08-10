@@ -81,5 +81,5 @@ test "typed packet snapshot access" {
     try std.testing.expectApproxEqAbs(@as(f32, 50), client.packet().speed, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 180), client.packet().speedKmh(), 0.001);
     try std.testing.expectEqual(@as(f32, 7200), client.packet().current_engine_rpm);
-    try std.testing.expectEqual(@as(i32, 4), client.packet().displayGear());
+    try std.testing.expectEqual(@as(i32, 5), client.packet().displayGear());
 }

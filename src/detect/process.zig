@@ -55,13 +55,13 @@ pub fn isRunning(pid: u32) bool {
     if (builtin.os.tag != .windows) return false;
     if (pid == 0) return false;
 
-    const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, @enumFromInt(0), pid);
+    // SYNCHRONIZE is required for WaitForSingleObject; QUERY alone + GetExitCodeProcess
+    // is unreliable because STILL_ACTIVE (259) is also a valid exit code.
+    const handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, @enumFromInt(0), pid);
     if (handle == null or handle == windows.INVALID_HANDLE_VALUE) return false;
     defer windows.CloseHandle(handle.?);
 
-    var exit_code: windows.DWORD = 0;
-    if (GetExitCodeProcess(handle.?, &exit_code) == @as(windows.BOOL, @enumFromInt(0))) return false;
-    return exit_code == STILL_ACTIVE;
+    return WaitForSingleObject(handle.?, 0) == WAIT_TIMEOUT;
 }
 
 fn isMatching(exe_basename: []const u8, sigs: []const Signature) ?Simulator {
@@ -73,7 +73,8 @@ fn isMatching(exe_basename: []const u8, sigs: []const Signature) ?Simulator {
 
 const TH32CS_SNAPPROCESS: windows.DWORD = 0x00000002;
 const PROCESS_QUERY_LIMITED_INFORMATION: windows.DWORD = 0x1000;
-const STILL_ACTIVE: windows.DWORD = 259;
+const SYNCHRONIZE: windows.DWORD = 0x00100000;
+const WAIT_TIMEOUT: windows.DWORD = 0x00000102;
 const MAX_PATH = 260;
 
 const PROCESSENTRY32W = extern struct {
@@ -110,10 +111,10 @@ extern "kernel32" fn OpenProcess(
     dwProcessId: windows.DWORD,
 ) callconv(.winapi) ?windows.HANDLE;
 
-extern "kernel32" fn GetExitCodeProcess(
-    hProcess: windows.HANDLE,
-    lpExitCode: *windows.DWORD,
-) callconv(.winapi) windows.BOOL;
+extern "kernel32" fn WaitForSingleObject(
+    hHandle: windows.HANDLE,
+    dwMilliseconds: windows.DWORD,
+) callconv(.winapi) windows.DWORD;
 
 test "matchFirst is case-insensitive exact match" {
     const sigs = [_]Signature{

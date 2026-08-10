@@ -79,8 +79,7 @@ pub const Client = struct {
     /// successful `poll()`; skipped entirely when unused.
     pub fn drivers(self: *Client) []const protocol.DriverData {
         if (!self.drivers_loaded) {
-            self.copyDrivers();
-            self.drivers_loaded = true;
+            if (self.copyDrivers()) self.drivers_loaded = true;
         }
         const n: usize = @intCast(@max(self.snap.num_cars, 0));
         return self.snap.all_drivers[0..@min(n, protocol.num_drivers_max)];
@@ -99,21 +98,27 @@ pub const Client = struct {
             const end = protocol.readSimulationTicks(view) orelse return false;
             if (begin == end) return true;
         }
-        @memcpy(std.mem.asBytes(self.snap)[0..protocol.shared_core_size], view[0..protocol.shared_core_size]);
-        return true;
+        return false;
     }
 
-    fn copyDrivers(self: *Client) void {
+    fn copyDrivers(self: *Client) bool {
         const view = self.mem.view;
         const n: usize = @intCast(@max(@min(self.snap.num_cars, @as(i32, @intCast(protocol.num_drivers_max))), 0));
-        if (n == 0) return;
+        if (n == 0) return true;
 
         const offset = protocol.shared_core_size;
         const bytes = n * protocol.driver_data_size;
-        if (view.len < offset + bytes) return;
+        if (view.len < offset + bytes) return false;
 
-        const dest = std.mem.asBytes(self.snap)[offset..][0..bytes];
-        @memcpy(dest, view[offset..][0..bytes]);
+        var attempts: u8 = 0;
+        while (attempts < 4) : (attempts += 1) {
+            const begin = protocol.readSimulationTicks(view) orelse return false;
+            const dest = std.mem.asBytes(self.snap)[offset..][0..bytes];
+            @memcpy(dest, view[offset..][0..bytes]);
+            const end = protocol.readSimulationTicks(view) orelse return false;
+            if (begin == end) return true;
+        }
+        return false;
     }
 };
 

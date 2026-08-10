@@ -79,9 +79,8 @@ pub const Client = struct {
     }
 
     pub fn isConnected(self: *const Client) bool {
-        const active = protocol.readActiveVehicles(self.mem.view) orelse 0;
-        if (active > 0 and (protocol.readPlayerHasVehicle(self.mem.view) orelse false)) return true;
-        return self.session_info.in_realtime or self.telem.elapsed_time > 0;
+        const active = protocol.readActiveVehicles(self.mem.view) orelse return false;
+        return active > 0 and (protocol.readPlayerHasVehicle(self.mem.view) orelse false);
     }
 
     pub fn poll(self: *Client) PollStatus {

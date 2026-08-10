@@ -19,9 +19,11 @@ pub const UpdateStatus = enum {
     /// The previous client was torn down. A later update will detect again.
     disconnected,
 
+    /// True when a prior successful normalize is implied by this status.
+    /// `.stale` is excluded: the manager may return stale before any snapshot exists.
     pub fn hasSnapshot(self: UpdateStatus) bool {
         return switch (self) {
-            .updated, .unchanged, .stale => true,
+            .updated, .unchanged => true,
             else => false,
         };
     }
@@ -131,6 +133,6 @@ pub const Snapshot = struct {
 test "update status snapshot availability" {
     try std.testing.expect(UpdateStatus.updated.hasSnapshot());
     try std.testing.expect(UpdateStatus.unchanged.hasSnapshot());
-    try std.testing.expect(UpdateStatus.stale.hasSnapshot());
+    try std.testing.expect(!UpdateStatus.stale.hasSnapshot());
     try std.testing.expect(!UpdateStatus.idle.hasSnapshot());
 }

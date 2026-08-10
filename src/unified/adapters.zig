@@ -112,6 +112,7 @@ pub fn normalizeAc(state: *State, client: *sims.ac.Client) bool {
         state.setDriver(joinName(&state.driver_buf, s.playerNameUtf8(&first), s.playerSurnameUtf8(&last)));
     }
     fillAcLike(state, p.speed_kmh, p.gear, p.rpms, p.fuel, p.gas, p.brake, p.clutch, p.acc_g, p.heading, p.pitch, p.roll);
+    state.data.controls.steering_rad = p.steer_angle;
     state.data.lap = .{
         .number = nonNegativeU32(gr.completed_laps),
         .position = positiveU16(gr.position),
@@ -165,6 +166,12 @@ pub fn normalizeAce(state: *State, client: *sims.ace.Client) bool {
     state.setCar(gr.carModel());
     state.setDriver(joinName(&state.driver_buf, gr.driverName(), gr.driverSurname()));
     fillAcLike(state, p.speed_kmh, p.gear, p.rpms, p.fuel, p.gas, p.brake, p.clutch, p.acc_g, p.heading, p.pitch, p.roll);
+    // ACE acc_g is [lat, long, vert]; fillAcLike remaps classic AC Y-up [lat, vert, long].
+    state.data.motion.acceleration_mps2 = .{
+        .x = p.acc_g[0] * g,
+        .y = p.acc_g[1] * g,
+        .z = p.acc_g[2] * g,
+    };
     state.data.controls.steering_rad = @as(f32, @floatFromInt(gr.steer_degrees)) * deg_to_rad;
     state.data.lap = .{
         .number = nonNegativeU32(gr.total_lap_count),
@@ -191,6 +198,7 @@ pub fn normalizeAcr(state: *State, client: *sims.acr.Client) bool {
         state.setDriver(joinName(&state.driver_buf, s.playerNameUtf8(&first), s.playerSurnameUtf8(&last)));
     }
     fillAcLike(state, p.speed_kmh, p.gear, p.rpms, p.fuel, p.gas, p.brake, p.clutch, p.acc_g, p.heading, p.pitch, p.roll);
+    state.data.controls.steering_rad = p.steer_angle;
     state.data.lap = .{
         .number = nonNegativeU32(gr.completed_laps),
         .position = positiveU16(gr.position),
@@ -302,9 +310,9 @@ pub fn normalizeR3e(state: *State, client: *sims.r3e.Client) bool {
         .fuel_liters = positiveFloat(s.fuel_left),
     };
     state.data.controls = .{
-        .throttle = unit(s.throttle),
-        .brake = unit(s.brake),
-        .clutch = unit(s.clutch),
+        .throttle = optionalNonNegativeUnit(s.throttle),
+        .brake = optionalNonNegativeUnit(s.brake),
+        .clutch = optionalNonNegativeUnit(s.clutch),
         .steering_rad = s.steer_input_raw * @as(f32, @floatFromInt(if (s.steer_lock_degrees > 0) s.steer_lock_degrees else 1)) * deg_to_rad,
     };
     state.data.motion = .{
@@ -369,6 +377,7 @@ pub fn normalizeLmu(state: *State, client: *sims.lmu.Client) bool {
         .kind = sessionKind(s.sessionValue().label()),
         .state = sessionState(s.gamePhaseValue().label()),
         .elapsed_time_s = positiveFloat(s.current_et),
+        .remaining_time_s = positiveFloat(s.session_time_remaining),
     };
     return true;
 }
@@ -399,7 +408,8 @@ pub fn normalizeFh6(state: *State, client: *sims.fh6.Client) bool {
         .steering_rad = @as(f32, @floatFromInt(p.steer)) * (900.0 / 127.0) * deg_to_rad,
     };
     state.data.motion = .{
-        .acceleration_mps2 = .{ .x = p.acceleration_z, .y = p.acceleration_x, .z = p.acceleration_y },
+        // Forza local space: X right (lat), Y up (vert), Z forward (long).
+        .acceleration_mps2 = .{ .x = p.acceleration_x, .y = p.acceleration_z, .z = p.acceleration_y },
         .orientation_rad = .{ .x = p.yaw, .y = p.pitch, .z = p.roll },
     };
     state.data.lap = .{
@@ -475,6 +485,9 @@ pub fn normalizeIracing(state: *State, client: *sims.iracing.Client) bool {
         .best_time_s = positiveFloat(readFloat(variables, i.lap_best)),
     };
     state.data.session.elapsed_time_s = positiveFloat(readFloat(variables, i.session_time));
+    if (readInt(variables, i.session_state)) |value| {
+        state.data.session.state = iracingSessionState(@enumFromInt(value));
+    }
     return true;
 }
 
@@ -595,6 +608,12 @@ fn optionalUnit(value: ?f32) ?f32 {
     return unit(value orelse return null);
 }
 
+/// R3E (and similar) use negative floats as N/A sentinels.
+fn optionalNonNegativeUnit(value: f32) ?f32 {
+    if (value < 0) return null;
+    return unit(value);
+}
+
 fn safeGear(value: anytype) ?i8 {
     const gear: i64 = @intCast(value);
     if (gear < -1 or gear > std.math.maxInt(i8)) return null;
@@ -640,10 +659,21 @@ fn sessionKind(label: []const u8) ?types.SessionKind {
 fn sessionState(label: []const u8) ?types.SessionState {
     if (containsIgnoreCase(label, "garage")) return .garage;
     if (containsIgnoreCase(label, "warmup") or containsIgnoreCase(label, "countdown")) return .warmup;
-    if (containsIgnoreCase(label, "green") or containsIgnoreCase(label, "active") or containsIgnoreCase(label, "live")) return .active;
+    if (containsIgnoreCase(label, "green") or containsIgnoreCase(label, "active") or containsIgnoreCase(label, "live") or containsIgnoreCase(label, "racing")) return .active;
     if (containsIgnoreCase(label, "pause")) return .paused;
     if (containsIgnoreCase(label, "finish") or containsIgnoreCase(label, "checkered")) return .finished;
     return if (label.len == 0) null else .other;
+}
+
+fn iracingSessionState(value: sims.iracing.enums.SessionState) ?types.SessionState {
+    return switch (value) {
+        .invalid => null,
+        .get_in_car => .garage,
+        .warmup, .parade_laps => .warmup,
+        .racing => .active,
+        .checkered, .cool_down => .finished,
+        else => .other,
+    };
 }
 
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {

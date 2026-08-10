@@ -40,11 +40,12 @@ pub const SharedMemory = struct {
 
     pub fn open(config: Config) OpenError!SharedMemory {
         if (builtin.os.tag != .windows) return OpenError.UnsupportedPlatform;
+        if (config.size == 0) return OpenError.MapFailed;
 
         const access = windowsFileMapAccess(config.access);
 
         var name_utf16: [256]u16 = undefined;
-        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, config.name) catch return OpenError.UnsupportedPlatform;
+        const name_len = std.unicode.utf8ToUtf16Le(name_utf16[0 .. name_utf16.len - 1], config.name) catch return OpenError.UnsupportedPlatform;
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 
@@ -109,7 +110,7 @@ pub const NamedEvent = struct {
         const access = windowsEventAccess(config.access);
 
         var name_utf16: [256]u16 = undefined;
-        const name_len = std.unicode.utf8ToUtf16Le(&name_utf16, config.name) catch return OpenError.UnsupportedPlatform;
+        const name_len = std.unicode.utf8ToUtf16Le(name_utf16[0 .. name_utf16.len - 1], config.name) catch return OpenError.UnsupportedPlatform;
         name_utf16[name_len] = 0;
         const name_w: [:0]const u16 = name_utf16[0..name_len :0];
 

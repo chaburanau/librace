@@ -173,7 +173,7 @@ pub const Manager = struct {
 
     fn connectFailure(_: *Manager, err: UpdateError) UpdateError!bool {
         return switch (err) {
-            error.NotFound, error.MapFailed, error.InvalidHeader, error.Timeout => false,
+            error.NotFound, error.MapFailed, error.InvalidHeader, error.Timeout, error.VersionMismatch => false,
             else => err,
         };
     }

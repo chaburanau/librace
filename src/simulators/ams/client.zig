@@ -79,8 +79,7 @@ pub const Client = struct {
     /// `poll()`; skipped when unused.
     pub fn participants(self: *Client) []const protocol.ParticipantInfo {
         if (!self.participants_loaded) {
-            self.copyParticipants();
-            self.participants_loaded = true;
+            if (self.copyParticipants()) self.participants_loaded = true;
         }
         const n: usize = @intCast(@max(self.snap.num_participants, 0));
         return self.snap.participant_info[0..@min(n, protocol.stored_participants_max)];
@@ -117,21 +116,22 @@ pub const Client = struct {
         return false;
     }
 
-    fn copyParticipants(self: *Client) void {
+    fn copyParticipants(self: *Client) bool {
         const view = self.mem.view;
-        if (view.len < protocol.shared_size) return;
+        if (view.len < protocol.shared_size) return false;
 
         var attempts: u8 = 0;
         while (attempts < 4) : (attempts += 1) {
-            const version_begin = protocol.readVersion(view) orelse return;
-            const num_begin = readNumParticipants(view) orelse return;
+            const version_begin = protocol.readVersion(view) orelse return false;
+            const num_begin = readNumParticipants(view) orelse return false;
 
             copyRange(self.snap, view, protocol.header_size, protocol.after_participants_offset);
 
-            const version_end = protocol.readVersion(view) orelse return;
-            const num_end = readNumParticipants(view) orelse return;
-            if (version_begin == version_end and num_begin == num_end) return;
+            const version_end = protocol.readVersion(view) orelse return false;
+            const num_end = readNumParticipants(view) orelse return false;
+            if (version_begin == version_end and num_begin == num_end) return true;
         }
+        return false;
     }
 
     fn copyRange(snap: *protocol.Shared, view: []const u8, start: usize, end: usize) void {
