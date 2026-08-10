@@ -19,9 +19,6 @@ pub const transport = core.types.TransportKind.mmap;
 
 pub const ConnectError = client.ConnectError;
 pub const ConnectOptions = struct {
-    /// Omitted/null means one connection attempt.
-    timeout: ?std.Io.Duration = null,
-    retry_interval: std.Io.Duration = std.Io.Duration.fromMilliseconds(200),
     /// Treat an otherwise connected simulator as stale after no new telemetry.
     /// Set to null to disable liveness timeout checks.
     stale_timeout: ?std.Io.Duration = std.Io.Duration.fromSeconds(30),
@@ -54,28 +51,9 @@ pub const Command = commands.Command;
 pub const mem_map_name = protocol.mem_map_name;
 
 pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions) ConnectError!Client {
-    var result = try core.connect.retry(
-        Client,
-        ConnectError,
-        std.mem.Allocator,
-        io,
-        allocator,
-        .{
-            .timeout = options.timeout,
-            .retry_interval = options.retry_interval,
-        },
-        Client.connect,
-        isRetryableConnectError,
-    );
+    var result = try Client.connect(allocator);
     result.configureLiveness(io, options.stale_timeout);
     return result;
-}
-
-fn isRetryableConnectError(err: ConnectError) bool {
-    return switch (err) {
-        error.NotFound, error.MapFailed, error.InvalidHeader => true,
-        else => false,
-    };
 }
 
 test {

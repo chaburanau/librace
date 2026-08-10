@@ -3,7 +3,7 @@
 //! Scans running processes for known game executables and reports which title
 //! (if any) is running, plus its PID. Use [`isRunning`] to poll whether that
 //! PID is still alive. Telemetry readiness is left to each simulator's
-//! `connect` timeouts / retries — this module does not probe shared memory or UDP.
+//! `connect` / `poll` — this module does not probe shared memory or UDP.
 
 const std = @import("std");
 const builtin_os = @import("builtin");

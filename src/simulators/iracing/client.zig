@@ -14,8 +14,6 @@ pub const VariableType = protocol.VarType;
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     InvalidHeader,
     OutOfMemory,
-    Timeout,
-    Canceled,
 };
 
 pub const PollStatus = enum {

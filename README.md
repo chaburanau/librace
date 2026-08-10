@@ -47,10 +47,6 @@ librace/
 │   ├── detect/               # Process-based "which sim is running?" helpers
 │   ├── unified/              # Auto lifecycle + normalized common snapshot
 │   └── simulators/           # One folder per simulator
-├── examples/
-│   ├── common/               # Shared simple + dashboard runners
-│   ├── dashboard/            # Legacy dashboard entry (build.zig wires per-sim providers)
-│   └── <name>/               # simple.zig + dashboard.zig per simulator
 ├── build.zig
 └── build.zig.zon
 ```
@@ -60,67 +56,7 @@ librace/
 ```bash
 # Run library unit tests
 zig build test
-
-# Build all example binaries (installed to zig-out/bin/)
-zig build
-
-# Simple smoke test (manual check while in a live session)
-zig build run-iracing
-
-# Auto-detect and print normalized telemetry
-zig build run-unified
-
-# Shared terminal dashboard — pick simulator at build time
-zig build dashboard -Dsim=iracing
-zig build dashboard -Dsim=ac
-zig build dashboard -Dsim=acc
-zig build dashboard -Dsim=ace
-zig build dashboard -Dsim=acr
-zig build dashboard -Dsim=ams
-zig build dashboard -Dsim=ams2
-zig build dashboard -Dsim=lmu
-zig build dashboard -Dsim=beamng
-zig build dashboard -Dsim=fh6
-zig build dashboard -Dsim=r3e
-
-# Or use the per-sim run step directly:
-zig build run-dashboard-ac
 ```
-
-### Example types
-
-Each simulator has a **simple** example and a **dashboard** provider under `examples/<name>/dashboard.zig`, built as `dashboard-<name>`.
-
-| Type | Binary | Build step | Purpose |
-|------|--------|------------|---------|
-| **Simple** | `zig-out/bin/<name>` | `zig build run-<name>` | Connect, poll a few samples, print one machine-readable line (`OK …` / `FAIL …`); exits 0 on success, 1 on failure |
-| **Dashboard** | `zig-out/bin/dashboard-<name>` | `zig build run-dashboard-<name>` | Full-screen terminal UI driven by a common `Data` snapshot filled by the selected provider |
-
-Simple example output (iRacing, when connected):
-
-```
-OK track=Circuit des 24 Heures du Mans car=Ferrari 499P gear=3 speed_kmh=142.3 rpm=6500 vars=354
-```
-
-Stub simulators print `FAIL not_implemented short_name=<name>` and exit with code 1. The dashboard shows a placeholder when the selected provider is not implemented yet.
-
-### Simple build steps
-
-| Simulator | Build step |
-|-----------|------------|
-| iRacing | `run-iracing` |
-| AC | `run-ac` |
-| ACC | `run-acc` |
-| ACE | `run-ace` |
-| ACR | `run-acr` |
-| AMS | `run-ams` |
-| AMS2 | `run-ams2` |
-| LMU | `run-lmu` |
-| BeamNG | `run-beamng` |
-| FH6 | `run-fh6` |
-| R3E | `run-r3e` |
-
-Dashboard: `zig build run-dashboard-<name>` (or `zig build dashboard -Dsim=<name>`).
 
 ## Using the library
 
@@ -164,14 +100,14 @@ Units are m/s, RPM, liters, seconds, radians, and normalized `0...1` pedal input
 `-1` for reverse, `0` for neutral, and `1+` for forward gears. Identity strings borrow
 manager-owned buffers and remain valid until the next `update()` or `deinit()`.
 
-Options include extra process signatures, shared-memory connection timing, iRacing stale
-timeout, and FH6 bind/poll settings. Retryable “process running, telemetry not ready” failures
-produce `.waiting_for_telemetry`; configuration, version, allocation, and cancellation failures
-are returned as errors.
+Options include extra process signatures, iRacing stale timeout, and BeamNG/FH6 bind/poll
+settings. When a process is visible but telemetry is not ready yet, `update()` returns
+`.waiting_for_telemetry`; configuration, version, allocation, and cancellation failures are
+returned as errors.
 
 ### Detect which simulator is running
 
-`librace.detect` scans processes for known game executables (no shared-memory or UDP probes). Use it to pick a simulator module; existing `connect` timeouts/retries still handle "running but not telemetry-ready."
+`librace.detect` scans processes for known game executables (no shared-memory or UDP probes). Use it to pick a simulator module; each title's `connect` / `poll` handles "running but not telemetry-ready."
 
 ```zig
 const librace = @import("librace");
@@ -196,9 +132,6 @@ const ir = librace.simulators.iracing;
 
 var client = try ir.connect(allocator, io, .{});
 defer client.deinit();
-
-// To wait for the simulator to start:
-// var client = try ir.connect(allocator, io, .{ .timeout = std.Io.Duration.fromSeconds(30) });
 
 // Name lookup is allocation-free. Cache handles until variables().version() changes.
 const speed = (try client.variables().find(ir.keys.var_name.speed)).?;
@@ -250,7 +183,7 @@ exposes typed struct snapshots:
 ```zig
 const ace = librace.simulators.ace;
 
-var client = try ace.connect(allocator, io, .{});
+var client = try ace.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -275,7 +208,7 @@ Assetto Corsa exposes three fixed shared-memory pages (`Local\acpmf_physics`,
 ```zig
 const ac = librace.simulators.ac;
 
-var client = try ac.connect(allocator, io, .{});
+var client = try ac.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -301,7 +234,7 @@ ACC-specific struct layouts:
 ```zig
 const acc = librace.simulators.acc;
 
-var client = try acc.connect(allocator, io, .{});
+var client = try acc.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -328,7 +261,7 @@ the graphics page is mostly unpopulated by the title:
 ```zig
 const acr = librace.simulators.acr;
 
-var client = try acr.connect(allocator, io, .{});
+var client = try acr.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -358,7 +291,7 @@ plugins in LMU's Gameplay settings.
 ```zig
 const lmu = librace.simulators.lmu;
 
-var client = try lmu.connect(allocator, io, .{});
+var client = try lmu.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -385,7 +318,7 @@ grid loads only when `participants()` is called:
 ```zig
 const ams = librace.simulators.ams;
 
-var client = try ams.connect(allocator, io, .{});
+var client = try ams.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -411,7 +344,7 @@ sequence-number torn-read protection; the participant grid loads only when `part
 ```zig
 const ams2 = librace.simulators.ams2;
 
-var client = try ams2.connect(allocator, io, .{});
+var client = try ams2.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -441,7 +374,7 @@ copies the player/session core on each `poll()`; the 128-entry driver grid is lo
 ```zig
 const r3e = librace.simulators.r3e;
 
-var client = try r3e.connect(allocator, io, .{});
+var client = try r3e.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -513,7 +446,7 @@ while (try client.poll(io, poll_timeout) == .ok) {
 }
 ```
 
-Fixed-struct simulators also export `field_count` (comptime protocol field total) for discovery-style display in examples.
+Fixed-struct simulators also export `field_count` (comptime protocol field total) for discovery-style display.
 
 See [AGENTS.md](AGENTS.md) for SDK design philosophy, IRSDK notes, and implementation workflow.
 

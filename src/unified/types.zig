@@ -31,9 +31,6 @@ pub const UpdateStatus = enum {
 
 pub const Options = struct {
     detection: detect.Options = .{},
-    /// Per-attempt wait used by shared-memory clients. Null performs one attempt.
-    connect_timeout: ?std.Io.Duration = null,
-    connect_retry_interval: std.Io.Duration = std.Io.Duration.fromMilliseconds(200),
     iracing_stale_timeout: ?std.Io.Duration = std.Io.Duration.fromSeconds(30),
     fh6_config: fh6.Config = .{},
     fh6_poll_timeout: std.Io.Timeout = .{ .duration = .{

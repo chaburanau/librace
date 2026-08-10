@@ -46,18 +46,7 @@ src/
       session.zig          # (optional) semi-static session metadata parsing
       keys.zig             # (iRacing only) commonly used map/name constants
 
-examples/
-  common/
-    root.zig               # Re-exports simple, dashboard, stub helpers
-    simple.zig             # Smoke-test runner (OK/FAIL output, comptime hooks)
-    dashboard.zig          # Terminal dashboard runner (common Data + render)
-    dashboard_main.zig     # Shared dashboard executable entry (imports per-sim provider)
-    stub.zig               # not_implemented hooks for unimplemented simulators
-  <short-name>/
-    simple.zig             # Minimal connect + poll example (comptime hooks)
-    dashboard.zig          # Dashboard provider (connect/poll/fillData hooks)
-
-build.zig                  # Library module + simple per sim + unified dashboard + tests
+build.zig                  # Library module + tests
 build.zig.zon
 ```
 
@@ -77,7 +66,7 @@ build.zig.zon
 | `fh6` | Forza Horizon 6 |
 | `r3e` | RaceRoom Racing Experience |
 
-When adding a new title, use a short lowercase folder name and add it to `src/simulators/root.zig`, `build.zig` (examples list), README, and this file.
+When adding a new title, use a short lowercase folder name and add it to `src/simulators/root.zig`, README, and this file.
 
 ## Transport model
 
@@ -101,7 +90,7 @@ const d = librace.detect.detect(.{}) orelse return;
 _ = librace.detect.isRunning(d.pid);
 ```
 
-`detect()` matches exe basenames exactly (case-insensitive) from a built-in table, plus any caller-supplied signatures appended via `Options`. `isRunning(pid)` is a non-blocking liveness check. This does **not** probe shared memory or UDP — use each title's `connect` timeouts/retries for telemetry readiness.
+`detect()` matches exe basenames exactly (case-insensitive) from a built-in table, plus any caller-supplied signatures appended via `Options`. `isRunning(pid)` is a non-blocking liveness check. This does **not** probe shared memory or UDP — use each title's `connect` / `poll` for telemetry readiness.
 
 ## Unified lifecycle (`librace.unified`)
 
@@ -160,9 +149,7 @@ Work **one simulator at a time**. Typical steps:
 2. **Implement connection** in `src/simulators/<name>/` using `core/transport` helpers.
 3. **Define protocol structs** for the wire format. For iRacing, keep those structs private and expose validated snapshots.
 4. **Expose a small public API** — connect, poll, and either lazy variable/session snapshots (iRacing) or typed snapshots + protocol string helpers (fixed-layout). Do **not** bake opinionated structs that assume what callers need.
-5. **Add one simple example** under `examples/<name>/simple.zig` using `examples/common/simple.zig` (comptime hooks).
-6. **Add a dashboard provider** under `examples/<name>/dashboard.zig` that implements `connect`, `deinit`, `isConnected`, `poll`, `fillData`, and optionally `connectErrorHint` for the shared `examples/common/dashboard.zig` `Data` snapshot.
-7. **Add tests** where parsing can be validated without a live game (fixture bytes, golden files). Live connection remains the examples’ job.
+5. **Add tests** where parsing can be validated without a live game (fixture bytes, golden files).
 
 Keep each simulator module self-contained. Prefer reusing `core/transport` over duplicating socket or mmap logic.
 
@@ -209,7 +196,7 @@ UTF-16 string fields decode via helpers on `Static` and `Graphics` (for example 
 ```zig
 const ac = librace.simulators.ac;
 
-var client = try ac.connect(allocator, io, .{});
+var client = try ac.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -241,7 +228,7 @@ only when `drivers()` is requested. UTF-8 string helpers and unit converters liv
 ```zig
 const r3e = librace.simulators.r3e;
 
-var client = try r3e.connect(allocator, io, .{});
+var client = try r3e.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -266,7 +253,7 @@ UTF-8 string helpers and unit converters live on `Shared` / `ParticipantInfo`.
 ```zig
 const ams = librace.simulators.ams;
 
-var client = try ams.connect(allocator, io, .{});
+var client = try ams.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -291,7 +278,7 @@ helpers and unit converters live on `Shared` / `ParticipantInfo`.
 ```zig
 const ams2 = librace.simulators.ams2;
 
-var client = try ams2.connect(allocator, io, .{});
+var client = try ams2.connect(allocator);
 defer client.deinit();
 
 while (client.poll() == .ok) {
@@ -326,52 +313,11 @@ Same pattern as AC: **typed snapshots** as the primary API; no `catalog.zig`, `k
 Each module re-exports `field_count` from `root.zig`. BeamNG and FH6 pass `std.Io` into `poll()` and accept
 `std.Io.Timeout` because telemetry arrives over UDP rather than shared memory.
 
-## Examples
-
-Each simulator has a **simple** example and a **dashboard** provider under `examples/<name>/`. The shared
-runner lives in `examples/common/dashboard_main.zig`; build produces `zig-out/bin/dashboard-<name>`.
-
-### Shared modules (`examples/common/`)
-
-| Module | Role |
-|--------|------|
-| `simple.zig` | Connect/poll loop, comptime hooks, prints `OK track=… car=… gear=…` or `FAIL …`, exits 1 on failure |
-| `dashboard.zig` | ANSI terminal dashboard; providers fill a common `Data` snapshot |
-| `stub.zig` | `not_implemented` simple hooks for unimplemented simulators |
-
-Keep simulator-specific helpers out of `examples/common/` (e.g. connect-error text lives in `examples/<name>/`).
-
-### Wiring a new simulator dashboard provider
-
-1. Create `examples/<name>/dashboard.zig` with a `Context` struct holding your SDK client.
-2. Implement `connect`, `deinit`, `isConnected`, `poll`, `fillData(ctx, *dashboard.Data)`, and optionally `connectErrorHint`.
-3. Map protocol fields into the shared `dashboard.Data` fields in `fillData`.
-4. Register the provider in `build.zig` (`addDashboardForSim`) when the sim is implemented; until then stubs use `examples/common/stub.zig` via `-Dsim=<name>`.
-
 ### Build commands
 
 ```bash
 zig build test                      # Library unit tests
-zig build                           # Build all example binaries
-zig build run-unified               # Auto-detect normalized telemetry
-zig build run-<name>                # Simple smoke test
-zig build run-dashboard-<name>      # Real-time dashboard for one simulator
-zig build dashboard -Dsim=<name>    # Alias for run-dashboard-<name>
 ```
-
-Example names: `iracing`, `ac`, `acc`, `ace`, `acr`, `ams`, `ams2`, `beamng`, `lmu`, `fh6`, `r3e`.
-
-Binaries: `zig-out/bin/<name>` (simple), `zig-out/bin/dashboard-<name>` (dashboard).
-
-### Simple example contract
-
-Successful run ends with a single line and exit code 0:
-
-```
-OK track=<s> car=<s> gear=<d> speed_kmh=<f> rpm=<f> vars=<d>
-```
-
-Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_connected`, `poll_failed`, etc.). Examples are for manual checks, not CI.
 
 ## Conventions
 
@@ -395,7 +341,6 @@ Failures print `FAIL <reason>` and exit with code 1 (`not_implemented`, `not_con
 
 - Do not merge unrelated simulators into one module (AC and ACC have different layouts).
 - Do not add dependencies without a clear need; prefer std and platform APIs for mmap/UDP.
-- Do not remove or skip updating `examples/<name>/simple.zig` when implementing a simulator; add `examples/<name>/dashboard.zig` for the dashboard.
 - Do not change `build.zig.zon` fingerprint unless intentionally forking the package identity.
 
 ## Current status

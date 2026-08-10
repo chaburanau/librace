@@ -6,8 +6,6 @@ const protocol = @import("protocol.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     OutOfMemory,
-    Timeout,
-    Canceled,
 };
 
 pub const PollStatus = enum {

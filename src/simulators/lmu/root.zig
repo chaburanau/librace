@@ -13,7 +13,6 @@ pub const name = "Le Mans Ultimate";
 pub const transport = core.types.TransportKind.mmap;
 
 pub const ConnectError = client.ConnectError;
-pub const ConnectOptions = core.connect.Options;
 pub const PollStatus = client.PollStatus;
 pub const Client = client.Client;
 
@@ -25,15 +24,8 @@ pub const mem_map_name = protocol.mem_map_name;
 pub const data_event_name = protocol.data_event_name;
 pub const field_count = protocol.field_count;
 
-pub fn connect(allocator: std.mem.Allocator, io: std.Io, options: ConnectOptions) ConnectError!Client {
-    return core.connect.retry(Client, ConnectError, std.mem.Allocator, io, allocator, options, Client.connect, isRetryableConnectError);
-}
-
-fn isRetryableConnectError(err: ConnectError) bool {
-    return switch (err) {
-        error.NotFound, error.MapFailed => true,
-        else => false,
-    };
+pub fn connect(allocator: std.mem.Allocator) ConnectError!Client {
+    return Client.connect(allocator);
 }
 
 test {

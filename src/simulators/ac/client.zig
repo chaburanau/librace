@@ -7,8 +7,6 @@ const protocol = @import("protocol.zig");
 
 pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     OutOfMemory,
-    Timeout,
-    Canceled,
 };
 
 /// Result of a single [`Client.poll`].

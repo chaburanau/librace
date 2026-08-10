@@ -142,28 +142,22 @@ pub const Manager = struct {
     }
 
     fn connectDetected(self: *Manager, simulator_kind: detect.Simulator) UpdateError!bool {
-        const common_options: ac.ConnectOptions = .{
-            .timeout = self.options.connect_timeout,
-            .retry_interval = self.options.connect_retry_interval,
-        };
         switch (simulator_kind) {
             .iracing => {
                 const client = iracing.connect(self.allocator, self.io, .{
-                    .timeout = self.options.connect_timeout,
-                    .retry_interval = self.options.connect_retry_interval,
                     .stale_timeout = self.options.iracing_stale_timeout,
                 }) catch |err| return self.connectFailure(err);
                 self.client = .{ .iracing = client };
             },
-            .ac => self.client = .{ .ac = ac.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .acc => self.client = .{ .acc = acc.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .ace => self.client = .{ .ace = ace.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .acr => self.client = .{ .acr = acr.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .ams => self.client = .{ .ams = ams.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .ams2 => self.client = .{ .ams2 = ams2.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
-            .lmu => self.client = .{ .lmu = lmu.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
+            .ac => self.client = .{ .ac = ac.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .acc => self.client = .{ .acc = acc.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .ace => self.client = .{ .ace = ace.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .acr => self.client = .{ .acr = acr.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .ams => self.client = .{ .ams = ams.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .ams2 => self.client = .{ .ams2 = ams2.connect(self.allocator) catch |err| return self.connectFailure(err) },
+            .lmu => self.client = .{ .lmu = lmu.connect(self.allocator) catch |err| return self.connectFailure(err) },
             .fh6 => self.client = .{ .fh6 = fh6.connect(self.io, .{ .config = self.options.fh6_config }) catch |err| return self.connectFailure(err) },
-            .r3e => self.client = .{ .r3e = r3e.connect(self.allocator, self.io, common_options) catch |err| return self.connectFailure(err) },
+            .r3e => self.client = .{ .r3e = r3e.connect(self.allocator) catch |err| return self.connectFailure(err) },
             .beamng => self.client = .{ .beamng = beamng.connect(self.io, .{ .config = self.options.beamng_config }) catch |err| return self.connectFailure(err) },
         }
         self.normalized.resetClient();
@@ -173,7 +167,7 @@ pub const Manager = struct {
 
     fn connectFailure(_: *Manager, err: UpdateError) UpdateError!bool {
         return switch (err) {
-            error.NotFound, error.MapFailed, error.InvalidHeader, error.Timeout, error.VersionMismatch => false,
+            error.NotFound, error.MapFailed, error.InvalidHeader, error.VersionMismatch => false,
             else => err,
         };
     }
