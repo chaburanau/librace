@@ -8,9 +8,9 @@
 const std = @import("std");
 
 pub const core = @import("core/root.zig");
-pub const detect = @import("detect/root.zig");
+pub const detect = @import("detector/root.zig");
 pub const simulators = @import("simulators/root.zig");
-pub const unified = @import("unified/root.zig");
+pub const unified = @import("unifier/root.zig");
 
 test {
     std.testing.refAllDecls(@This());
