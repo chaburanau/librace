@@ -131,14 +131,6 @@ pub const Physics = extern struct {
     tyre_contact_heading: [4][3]f32 = @splat(@splat(0)),
     brake_bias: f32 = 0,
     local_velocity: [3]f32 = .{ 0, 0, 0 },
-
-    pub fn gearLabel(self: *const Physics, buf: []u8) []const u8 {
-        return switch (self.gear) {
-            0 => "R",
-            1 => "N",
-            else => std.fmt.bufPrint(buf, "{d}", .{self.gear - 1}) catch "?",
-        };
-    }
 };
 
 /// Per-frame HUD / session-progress telemetry (`Local\\acpmf_graphics`).
@@ -184,13 +176,6 @@ pub const Graphics = extern struct {
 
     pub fn flagValue(self: *const Graphics) FlagType {
         return @enumFromInt(self.flag);
-    }
-
-    /// Synthesised location label (AC has pit booleans but no car-location enum).
-    pub fn locationLabel(self: *const Graphics) []const u8 {
-        if (self.is_in_pit != 0) return "Pit Box";
-        if (self.is_in_pit_lane != 0) return "Pit Lane";
-        return "Track";
     }
 
     pub fn currentTimeUtf8(self: *const Graphics, out: []u8) ?[]const u8 {
@@ -296,12 +281,6 @@ pub const Static = extern struct {
     }
 };
 
-/// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
-pub fn readPacketId(view: []const u8) ?i32 {
-    if (view.len < 4) return null;
-    return std.mem.readInt(i32, view[0..4], .little);
-}
-
 test "physics scalar offsets match the AC layout" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Physics, "packet_id"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(Physics, "gear"));
@@ -339,10 +318,4 @@ test "Static wstring helpers decode UTF-16LE fields" {
 
     var out: [64]u8 = undefined;
     try std.testing.expectEqualStrings("Ferrari 458", stat.carModelUtf8(&out).?);
-}
-
-test "readPacketId reads the leading counter" {
-    var phys: Physics = .{};
-    phys.packet_id = 99;
-    try std.testing.expectEqual(@as(i32, 99), readPacketId(std.mem.asBytes(&phys)).?);
 }

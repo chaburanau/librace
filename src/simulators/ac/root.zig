@@ -12,15 +12,10 @@ const core = @import("../../core/root.zig");
 const std = @import("std");
 
 const client = @import("client.zig");
+const protocol = @import("protocol.zig");
 
-pub const protocol = @import("protocol.zig");
-
-pub const name = "Assetto Corsa";
-pub const transport = core.types.TransportKind.mmap;
-
-pub const ConnectError = client.ConnectError;
-pub const PollStatus = client.PollStatus;
 pub const Client = client.Client;
+pub const ConnectError = client.ConnectError;
 
 pub const Physics = protocol.Physics;
 pub const Graphics = protocol.Graphics;
@@ -29,6 +24,8 @@ pub const Status = protocol.Status;
 pub const SessionType = protocol.SessionType;
 pub const FlagType = protocol.FlagType;
 
+pub const name = "Assetto Corsa";
+pub const transport = core.types.TransportKind.mmap;
 pub const physics_map_name = protocol.physics_map_name;
 pub const graphics_map_name = protocol.graphics_map_name;
 pub const static_map_name = protocol.static_map_name;

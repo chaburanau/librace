@@ -9,26 +9,13 @@ pub const ConnectError = core.transport.mmap.SharedMemory.OpenError || error{
     OutOfMemory,
 };
 
-/// Result of a single [`Client.poll`].
-pub const PollStatus = enum {
-    /// Fresh page copies were taken this tick.
-    ok,
-    /// The simulator reports no active session.
-    disconnected,
-    /// Connected, but the page could not be copied this tick.
-    stale,
-
-    pub fn isOk(self: PollStatus) bool {
-        return self == .ok;
-    }
-};
-
 pub const Client = struct {
     allocator: std.mem.Allocator,
+
+    // Shared memory mappings.
     phys_mem: core.transport.mmap.SharedMemory,
     gfx_mem: core.transport.mmap.SharedMemory,
     static_mem: core.transport.mmap.SharedMemory,
-    has_static: bool,
 
     // Owned, torn-read-safe copies. Heap allocation keeps borrows valid if Client is moved.
     phys: *protocol.Physics,
@@ -48,20 +35,11 @@ pub const Client = struct {
         });
         errdefer gfx_mem.close();
 
-        // Static is best-effort: normal live sessions publish it, but callers can still read
-        // high-rate telemetry if it is temporarily absent during session transitions.
-        var has_static = true;
-        var static_mem = core.transport.mmap.SharedMemory.open(.{
+        var static_mem = try core.transport.mmap.SharedMemory.open(.{
             .name = protocol.static_map_name,
             .size = @sizeOf(protocol.Static),
-        }) catch blk: {
-            has_static = false;
-            break :blk core.transport.mmap.SharedMemory{};
-        };
+        });
         errdefer static_mem.close();
-        if (has_static and static_mem.view.len < @sizeOf(protocol.Static)) {
-            has_static = false;
-        }
 
         const phys = try allocator.create(protocol.Physics);
         errdefer allocator.destroy(phys);
@@ -79,12 +57,11 @@ pub const Client = struct {
             .phys_mem = phys_mem,
             .gfx_mem = gfx_mem,
             .static_mem = static_mem,
-            .has_static = has_static,
             .phys = phys,
             .gfx = gfx,
             .stat = stat,
         };
-        _ = client.copyAll();
+        _ = client.copy();
         return client;
     }
 
@@ -94,30 +71,18 @@ pub const Client = struct {
         self.allocator.destroy(self.stat);
         self.phys_mem.close();
         self.gfx_mem.close();
-        if (self.has_static) self.static_mem.close();
+        self.static_mem.close();
     }
 
-    /// Live simulator status read directly from the graphics mapping (not the local copy).
-    pub fn liveStatus(self: *const Client) protocol.Status {
-        const view = self.gfx_mem.view;
-        if (view.len < 8) return .off;
-        return @enumFromInt(std.mem.readInt(i32, view[4..8], .little));
-    }
-
-    /// `packetId` from the live physics mapping (not the local copy).
-    pub fn livePhysicsPacketId(self: *const Client) i32 {
-        return protocol.readPacketId(self.phys_mem.view) orelse 0;
-    }
-
-    /// True when AC has an active session or the physics packet counter has begun advancing.
-    pub fn isConnected(self: *const Client) bool {
-        return self.liveStatus() != .off or self.livePhysicsPacketId() != 0;
+    // Status according to the most recent graphics snapshot.
+    pub fn status(self: *const Client) protocol.Status {
+        return self.gfx.status();
     }
 
     /// Copy fresh physics/graphics/static snapshots from shared memory.
-    pub fn poll(self: *Client) PollStatus {
-        if (!self.isConnected()) return .disconnected;
-        if (!self.copyAll()) return .stale;
+    pub fn poll(self: *Client) core.types.PollStatus {
+        if (self.status() == .off) return .disconnected;
+        if (!self.copy()) return .stale;
         return .ok;
     }
 
@@ -133,33 +98,43 @@ pub const Client = struct {
 
     /// Typed view of the static session metadata, or null when that page is unavailable.
     pub fn static(self: *const Client) ?*const protocol.Static {
-        return if (self.has_static) self.stat else null;
+        return self.stat;
     }
 
-    fn copyAll(self: *Client) bool {
-        const ok_phys = copyPage(protocol.Physics, self.phys_mem.view, self.phys);
-        const ok_gfx = copyPage(protocol.Graphics, self.gfx_mem.view, self.gfx);
-        if (self.has_static) {
-            const size = @sizeOf(protocol.Static);
-            if (self.static_mem.view.len >= size) {
-                @memcpy(std.mem.asBytes(self.stat), self.static_mem.view[0..size]);
-            }
-        }
-        return ok_phys and ok_gfx;
+    fn copy(self: *Client) bool {
+        const ok_phys = copyPage(protocol.Physics, self.phys_mem.view, self.phys, true);
+        const ok_gfx = copyPage(protocol.Graphics, self.gfx_mem.view, self.gfx, true);
+        const ok_stat = copyPage(protocol.Static, self.static_mem.view, self.stat, false);
+
+        return ok_phys and ok_gfx and ok_stat;
     }
 };
 
+/// `packetId` lives at offset 0 of both live pages; read it without a full struct copy.
+fn readPacketId(view: []const u8) ?i32 {
+    if (view.len < 4) return null;
+    return std.mem.readInt(i32, view[0..4], .little);
+}
+
 /// Copy a page into `dest`, retrying while `packetId` changes mid-copy (torn read).
-fn copyPage(comptime T: type, view: []const u8, dest: *T) bool {
+fn copyPage(comptime T: type, view: []const u8, dest: *T, verify: bool) bool {
+    const MAX_RETRIES = 5;
+
     const size = @sizeOf(T);
     if (view.len < size) return false;
-    var attempts: u8 = 0;
-    while (attempts < 4) : (attempts += 1) {
-        const begin = protocol.readPacketId(view) orelse return false;
+
+    if (!verify) {
         @memcpy(std.mem.asBytes(dest), view[0..size]);
-        const end = protocol.readPacketId(view) orelse return false;
+        return true;
+    }
+
+    for (0..MAX_RETRIES) |_| {
+        const begin = readPacketId(view) orelse return false;
+        @memcpy(std.mem.asBytes(dest), view[0..size]);
+        const end = readPacketId(view) orelse return false;
         if (begin == end) return true;
     }
+
     return false;
 }
 
@@ -172,7 +147,7 @@ test "copyPage transfers a consistent snapshot" {
     src.gear = 3;
 
     var dest: protocol.Physics = undefined;
-    try std.testing.expect(copyPage(protocol.Physics, std.mem.asBytes(&src), &dest));
+    try std.testing.expect(copyPage(protocol.Physics, std.mem.asBytes(&src), &dest, true));
     try std.testing.expectEqual(@as(i32, 3), dest.gear);
     try std.testing.expectApproxEqAbs(@as(f32, 88.5), dest.speed_kmh, 0.001);
 }
@@ -180,7 +155,7 @@ test "copyPage transfers a consistent snapshot" {
 test "copyPage rejects a short view" {
     var dest: protocol.Physics = undefined;
     var tiny: [4]u8 = .{ 0, 0, 0, 0 };
-    try std.testing.expect(!copyPage(protocol.Physics, &tiny, &dest));
+    try std.testing.expect(!copyPage(protocol.Physics, &tiny, &dest, true));
 }
 
 test "typed snapshot access and wstring decode" {
@@ -208,7 +183,6 @@ test "typed snapshot access and wstring decode" {
         .phys_mem = .{},
         .gfx_mem = .{},
         .static_mem = .{},
-        .has_static = true,
         .phys = phys,
         .gfx = gfx,
         .stat = stat,
@@ -233,4 +207,10 @@ test "connect handles available or missing shared memory" {
         error.NotFound, error.MapFailed => {},
         else => return err,
     }
+}
+
+test "readPacketId reads the leading counter" {
+    var phys: protocol.Physics = .{};
+    phys.packet_id = 99;
+    try std.testing.expectEqual(@as(i32, 99), readPacketId(std.mem.asBytes(&phys)).?);
 }
