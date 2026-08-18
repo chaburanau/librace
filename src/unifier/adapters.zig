@@ -711,7 +711,6 @@ test "AC protocol fixture normalizes canonical units" {
         .phys_mem = undefined,
         .gfx_mem = undefined,
         .static_mem = undefined,
-        .has_static = true,
         .phys = &physics,
         .gfx = &graphics,
         .stat = &static,
