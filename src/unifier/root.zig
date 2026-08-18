@@ -12,9 +12,6 @@ pub const UpdateError = @import("manager.zig").UpdateError;
 
 pub const Options = types.Options;
 pub const UpdateStatus = types.UpdateStatus;
-pub const Snapshot = types.Snapshot;
-pub const SessionKind = types.SessionKind;
-pub const SessionState = types.SessionState;
 
 test {
     std.testing.refAllDecls(@This());

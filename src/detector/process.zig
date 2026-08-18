@@ -4,10 +4,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const windows = std.os.windows;
 
+const types = @import("../core/types.zig");
 const strings = @import("../core/utils/strings.zig");
 const signatures = @import("signatures.zig");
 const Signature = signatures.Signature;
-const Simulator = signatures.Simulator;
+const Simulator = types.Simulator;
 
 pub const Detection = struct {
     simulator: Simulator,

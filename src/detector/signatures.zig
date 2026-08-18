@@ -4,23 +4,10 @@
 //! best-effort (they may drift across game versions / launchers). Callers can
 //! pass extra signatures via `Options` to append to this list.
 
-pub const Simulator = enum {
-    iracing,
-    ac,
-    acc,
-    ace,
-    acr,
-    ams,
-    ams2,
-    lmu,
-    fh6,
-    r3e,
-    beamng,
-};
+const types = @import("../core/types.zig");
 
 pub const Signature = struct {
-    simulator: Simulator,
-    /// Case-insensitive exe basename, e.g. `"acs.exe"`.
+    simulator: types.Simulator,
     exe_name: []const u8,
 };
 

@@ -1,7 +1,8 @@
 //! Detection-driven lifecycle manager for all supported simulators.
 
 const std = @import("std");
-const detect = @import("../detect/root.zig");
+const core = @import("../core/types.zig");
+const detector = @import("../detector/root.zig");
 const simulators = @import("../simulators/root.zig");
 const adapters = @import("adapters.zig");
 const types = @import("types.zig");
@@ -32,7 +33,7 @@ pub const UpdateError = iracing.ConnectError ||
     lmu.ConnectError ||
     r3e.ConnectError;
 
-const Client = union(detect.Simulator) {
+const Client = union(detector.Simulator) {
     iracing: iracing.Client,
     ac: ac.Client,
     acc: acc.Client,
@@ -48,7 +49,7 @@ const Client = union(detect.Simulator) {
 
 /// Pointer to the active concrete client. The pointer is invalidated by the
 /// next `Manager.update` that disconnects or switches titles, or by `deinit`.
-pub const NativeClient = union(detect.Simulator) {
+pub const NativeClient = union(detector.Simulator) {
     iracing: *iracing.Client,
     ac: *ac.Client,
     acc: *acc.Client,
@@ -66,7 +67,7 @@ pub const Manager = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     options: types.Options,
-    detection: ?detect.Detection = null,
+    detection: ?detector.Detection = null,
     client: ?Client = null,
     normalized: adapters.State,
     has_snapshot: bool = false,
@@ -94,7 +95,7 @@ pub const Manager = struct {
     pub fn update(self: *Manager) UpdateError!types.UpdateStatus {
         if (self.client != null) {
             const current = self.detection orelse unreachable;
-            if (!detect.isRunning(current.pid)) {
+            if (!detector.isRunning(current.pid)) {
                 self.deinitActive();
                 self.detection = null;
                 self.has_snapshot = false;
@@ -104,13 +105,13 @@ pub const Manager = struct {
         }
 
         if (self.detection) |current| {
-            if (!detect.isRunning(current.pid)) {
+            if (!detector.isRunning(current.pid)) {
                 self.detection = null;
                 self.has_snapshot = false;
                 return .disconnected;
             }
         } else {
-            self.detection = detect.detect(self.options.detection) orelse return .idle;
+            self.detection = detector.detect(self.options.detection) orelse return .idle;
         }
 
         const current = self.detection.?;
@@ -124,7 +125,7 @@ pub const Manager = struct {
         return self.normalized.snapshot(current.simulator, current.pid);
     }
 
-    pub fn simulator(self: *const Manager) ?detect.Simulator {
+    pub fn simulator(self: *const Manager) ?detector.Simulator {
         return if (self.detection) |current| current.simulator else null;
     }
 
@@ -141,7 +142,7 @@ pub const Manager = struct {
         return null;
     }
 
-    fn connectDetected(self: *Manager, simulator_kind: detect.Simulator) UpdateError!bool {
+    fn connectDetected(self: *Manager, simulator_kind: detector.Simulator) UpdateError!bool {
         switch (simulator_kind) {
             .iracing => {
                 const client = iracing.connect(self.allocator, self.io, .{
@@ -172,7 +173,7 @@ pub const Manager = struct {
         };
     }
 
-    fn pollActive(self: *Manager, current: detect.Detection) UpdateError!types.UpdateStatus {
+    fn pollActive(self: *Manager, current: detector.Detection) UpdateError!types.UpdateStatus {
         if (self.client) |*client| {
             return switch (client.*) {
                 .iracing => |*value| switch (value.poll()) {
@@ -209,7 +210,7 @@ pub const Manager = struct {
 
     fn pollFixed(
         self: *Manager,
-        current: detect.Detection,
+        current: detector.Detection,
         status: anytype,
         comptime normalize: anytype,
         client: anytype,
@@ -221,7 +222,7 @@ pub const Manager = struct {
         };
     }
 
-    fn didUpdate(self: *Manager, _: detect.Detection, normalized_ok: bool) types.UpdateStatus {
+    fn didUpdate(self: *Manager, _: detector.Detection, normalized_ok: bool) types.UpdateStatus {
         if (!normalized_ok) return .stale;
         self.has_snapshot = true;
         return .updated;
@@ -248,7 +249,7 @@ pub const Manager = struct {
 };
 
 test "all detected simulators are represented by client unions" {
-    inline for (@typeInfo(detect.Simulator).@"enum".fields) |field| {
+    inline for (@typeInfo(detector.Simulator).@"enum".fields) |field| {
         try std.testing.expect(@hasField(Client, field.name));
         try std.testing.expect(@hasField(NativeClient, field.name));
     }

@@ -8,10 +8,11 @@
 const std = @import("std");
 const builtin_os = @import("builtin");
 
+const types = @import("../core/types.zig");
 const process = @import("process.zig");
 const signatures_mod = @import("signatures.zig");
 
-pub const Simulator = signatures_mod.Simulator;
+pub const Simulator = types.Simulator;
 pub const Signature = signatures_mod.Signature;
 pub const Detection = process.Detection;
 
